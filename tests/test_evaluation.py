@@ -13,21 +13,23 @@ def sample_data_dir():
 
 
 def test_evaluation_with_entity_resolution(sample_data_dir):
-    """Test evaluation metrics for entity resolution."""
-    left_path = sample_data_dir / "customers_a.parquet"
-    right_path = sample_data_dir / "customers_b.parquet"
+    """Test evaluation metrics for entity resolution using simple evaluation dataset."""
+    # Use dedicated evaluation dataset (simple, stable ground truth)
+    left_path = sample_data_dir / "ExactMatcher" / "evaluation" / "customers_a.parquet"
+    right_path = sample_data_dir / "ExactMatcher" / "evaluation" / "customers_b.parquet"
 
-    # Create matcher and run matching
-    matcher = Matcher(left_source=str(left_path), right_source=str(right_path))
-    results = matcher.match_exact(field="email")
+    # Load data and create matcher
+    left_df = pl.read_parquet(left_path)
+    right_df = pl.read_parquet(right_path)
+    matcher = Matcher(left=left_df, right=right_df)
+    results = matcher.match(rules="email")
 
-    # Create ground truth DataFrame
-    # Known matches: first 30 records have matching emails
+    # Create ground truth DataFrame - simple: first 30 records match on email
     ground_truth_data = []
     for i in range(30):
         ground_truth_data.append({
-            "left_id": f"left_{i+1}",
-            "right_id": f"right_{i+1}"
+            "left_id": f"eval_left_{i+1}",
+            "right_id": f"eval_right_{i+1}"
         })
     ground_truth = pl.DataFrame(ground_truth_data)
 
@@ -45,11 +47,12 @@ def test_evaluation_with_entity_resolution(sample_data_dir):
 
 def test_evaluation_with_deduplication(sample_data_dir):
     """Test evaluation metrics for deduplication."""
-    source_path = sample_data_dir / "customers.parquet"
+    source_path = sample_data_dir / "ExactMatcher" / "deduplication" / "customers.parquet"
 
-    # Create matcher and run matching
-    matcher = Matcher(left_source=str(source_path))
-    results = matcher.match_exact(field="email")
+    # Load data and create matcher
+    df = pl.read_parquet(source_path)
+    matcher = Matcher(left=df)
+    results = matcher.match(rules="email")
 
     # For deduplication, we need to create ground truth from known duplicate groups
     # Load the data to understand the structure
@@ -89,19 +92,22 @@ def test_evaluation_with_deduplication(sample_data_dir):
 
 
 def test_evaluation_with_custom_evaluator(sample_data_dir):
-    """Test evaluation with custom evaluator component."""
-    left_path = sample_data_dir / "customers_a.parquet"
-    right_path = sample_data_dir / "customers_b.parquet"
+    """Test evaluation with custom evaluator component using simple evaluation dataset."""
+    # Use dedicated evaluation dataset (simple, stable ground truth)
+    left_path = sample_data_dir / "ExactMatcher" / "evaluation" / "customers_a.parquet"
+    right_path = sample_data_dir / "ExactMatcher" / "evaluation" / "customers_b.parquet"
 
-    matcher = Matcher(left_source=str(left_path), right_source=str(right_path))
-    results = matcher.match_exact(field="email")
+    left_df = pl.read_parquet(left_path)
+    right_df = pl.read_parquet(right_path)
+    matcher = Matcher(left=left_df, right=right_df)
+    results = matcher.match(rules="email")
 
-    # Create ground truth
+    # Create ground truth - simple: first 30 records match on email
     ground_truth_data = []
     for i in range(30):
         ground_truth_data.append({
-            "left_id": f"left_{i+1}",
-            "right_id": f"right_{i+1}"
+            "left_id": f"eval_left_{i+1}",
+            "right_id": f"eval_right_{i+1}"
         })
     ground_truth = pl.DataFrame(ground_truth_data)
 
@@ -116,19 +122,22 @@ def test_evaluation_with_custom_evaluator(sample_data_dir):
 
 
 def test_evaluation_with_parquet_ground_truth(sample_data_dir, tmp_path):
-    """Test evaluation with ground truth loaded from parquet file."""
-    left_path = sample_data_dir / "customers_a.parquet"
-    right_path = sample_data_dir / "customers_b.parquet"
+    """Test evaluation with ground truth loaded from parquet file using simple evaluation dataset."""
+    # Use dedicated evaluation dataset (simple, stable ground truth)
+    left_path = sample_data_dir / "ExactMatcher" / "evaluation" / "customers_a.parquet"
+    right_path = sample_data_dir / "ExactMatcher" / "evaluation" / "customers_b.parquet"
 
-    matcher = Matcher(left_source=str(left_path), right_source=str(right_path))
-    results = matcher.match_exact(field="email")
+    left_df = pl.read_parquet(left_path)
+    right_df = pl.read_parquet(right_path)
+    matcher = Matcher(left=left_df, right=right_df)
+    results = matcher.match(rules="email")
 
-    # Create and save ground truth to parquet
+    # Create and save ground truth to parquet - simple: first 30 records match on email
     ground_truth_data = []
     for i in range(30):
         ground_truth_data.append({
-            "left_id": f"left_{i+1}",
-            "right_id": f"right_{i+1}"
+            "left_id": f"eval_left_{i+1}",
+            "right_id": f"eval_right_{i+1}"
         })
     ground_truth = pl.DataFrame(ground_truth_data)
     ground_truth_path = tmp_path / "ground_truth.parquet"
@@ -143,16 +152,19 @@ def test_evaluation_with_parquet_ground_truth(sample_data_dir, tmp_path):
 
 def test_evaluation_error_handling(sample_data_dir):
     """Test evaluation error handling."""
-    left_path = sample_data_dir / "customers_a.parquet"
-    right_path = sample_data_dir / "customers_b.parquet"
+    # Use any dataset - this test just checks error handling
+    left_path = sample_data_dir / "ExactMatcher" / "evaluation" / "customers_a.parquet"
+    right_path = sample_data_dir / "ExactMatcher" / "evaluation" / "customers_b.parquet"
 
-    matcher = Matcher(left_source=str(left_path), right_source=str(right_path))
-    results = matcher.match_exact(field="email")
+    left_df = pl.read_parquet(left_path)
+    right_df = pl.read_parquet(right_path)
+    matcher = Matcher(left=left_df, right=right_df)
+    results = matcher.match(rules="email")
 
     # Ground truth with wrong column names
     bad_ground_truth = pl.DataFrame({
-        "wrong_left": ["left_1"],
-        "wrong_right": ["right_1"]
+        "wrong_left": ["eval_left_1"],
+        "wrong_right": ["eval_right_1"]
     })
 
     with pytest.raises(ValueError, match="left_id.*right_id"):

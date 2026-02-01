@@ -146,7 +146,7 @@ matcher = Matcher(
 )
 
 # Simple case: same field name in both sources (Phase 1)
-results = matcher.match_exact(field="email")
+results = matcher.match(field="email")
 
 print(f"Found {len(results.matches)} matches")
 results.matches.head(10)  # Explore immediately
@@ -200,7 +200,7 @@ results.matches  # Polars DataFrame with match results
 
 **Core Library (Minimal):**
 - `Matcher` class (main interface)
-- `match_exact(field="email")` method - single field only, same name in both sources
+- `match(field="email")` method - single field only, same name in both sources
 - `MatchResults` class - just wraps matches DataFrame
 - Works with Polars DataFrames or file paths
 - Basic error handling (file not found, field doesn't exist, empty data)
@@ -221,7 +221,7 @@ matcher = Matcher(
 
 # Single field exact matching (same field name in both sources)
 # That's it - this is all Phase 1 does
-results = matcher.match_exact(field="email")
+results = matcher.match(field="email")
 
 # View results
 print(f"Found {len(results.matches)} matches")
@@ -274,7 +274,7 @@ class Matcher:
         if self.right is not None and self.right.height == 0:
             raise ValueError("Right source is empty")
 
-    def match_exact(self, field: str) -> MatchResults:
+    def match(self, field: str) -> MatchResults:
         """Exact matching on single field. Field must exist in both sources.
 
         Args:
@@ -380,7 +380,7 @@ class MatchResults:
 
 ```python
 # Blocking for performance - simple, one key
-results = matcher.match_exact(
+results = matcher.match(
     field="email",
     blocking_key="zip_code"  # Optional, user-specified
 )
@@ -391,7 +391,7 @@ results = matcher.match_exact(
 ### Implementation
 
 ```python
-def match_exact(
+def match(
     self,
     field: str,
     blocking_key: Optional[str] = None

@@ -1,12 +1,12 @@
 # CLAUDE.md - Project Context for AI Assistants
 
-This file provides context and guidelines for AI assistants working on the matcher project.  See [](README.md)
+This file provides context and guidelines for AI assistants working on the hygge-match project.  See [](README.md)
 
 ---
 
 ## Project Overview
 
-**Matcher** is a Python library for entity resolution and deduplication, built with a focus on simplicity and incremental development.
+**hygge-match** (repository: `hygge-match`) is a Python library for entity resolution and deduplication, built with a focus on comfort, simplicity, and incremental development. The library follows hygge philosophy: making matching feel natural, comfortable, and reliable.
 
 **Core Purpose:**
 - Match records across data sources (entity resolution)
@@ -25,20 +25,24 @@ This file provides context and guidelines for AI assistants working on the match
 ## Philosophy & Principles
 
 ### hygge Core Values
-- **Comfort**: APIs should feel natural and comfortable to use
-- **Simplicity**: Clean, intuitive APIs that feel natural
-- **Reliability**: Robust, predictable behavior without surprises
-- **Flow**: Smooth, efficient matching without friction
+
+hygge-match embodies hygge philosophy in every aspect:
+
+- **Comfort**: APIs should feel natural and comfortable to use - you should relax while you match some records
+- **Simplicity**: Clean, intuitive APIs that feel natural - no unnecessary complexity
+- **Reliability**: Robust, predictable behavior without surprises - matching should just work
+- **Flow**: Smooth, efficient matching without friction - data should move comfortably between sources
 
 ### Rails-Inspired Development Principles
 
-#### Core Principles
-1. **Convention over Configuration**: Smart defaults, minimal setup
-2. **Programmer Happiness**: APIs should feel natural and comfortable
-3. **Flow Over Force**: Matching should work smoothly between data sources
-4. **Reliability Over Speed**: Prefer robust, predictable behavior
-5. **Clarity Over Cleverness**: Simple, clear code over complex optimizations
-6. **Progress over Perfection**: Ship working solutions that solve real problems
+#### Core Principles (Aligned with hygge)
+
+1. **Comfort Over Complexity**: Smart defaults, minimal setup - APIs should feel natural
+2. **Programmer Happiness**: APIs should make developers smile - matching should feel cozy
+3. **Flow Over Force**: Matching should work smoothly between data sources - no friction
+4. **Reliability Over Speed**: Prefer robust, predictable behavior - comfort over raw speed
+5. **Clarity Over Cleverness**: Simple, clear code over complex optimizations - clarity brings comfort
+6. **Progress over Perfection**: Ship working solutions that solve real problems - good enough is cozy
 
 #### Detailed Rails Philosophy for matcher
 1. **Optimize for Programmer Happiness**
@@ -60,7 +64,7 @@ This file provides context and guidelines for AI assistants working on the match
 
 5. **Exalt Beautiful Code**
    - Aesthetically pleasing code is valuable
-   - **matcher application**: `matcher.match_exact()` feels natural, not `MatcherExecutor.execute_match()`
+   - **matcher application**: `matcher.match()` feels natural, not `MatcherExecutor.execute_match()`
 
 6. **Provide Sharp Knives**
    - Trust programmers with powerful tools
@@ -84,7 +88,7 @@ matcher code should be **Pythonic** - following Python's idioms, conventions, an
 
 #### Core Zen of Python Principles
 
-1. **Beautiful is Better Than Ugly**: Code should be aesthetically pleasing (`matcher.match_exact()` not `MatcherExecutor.execute()`)
+1. **Beautiful is Better Than Ugly**: Code should be aesthetically pleasing (`matcher.match()` not `MatcherExecutor.execute()`)
 2. **Explicit is Better Than Implicit**: Make intentions clear (`field="email"` explicitly declares matching field)
 3. **Simple is Better Than Complex**: Prefer straightforward solutions with smart defaults
 4. **Complex is Better Than Complicated**: Some problems require complexity, but keep it organized
@@ -95,7 +99,7 @@ matcher code should be **Pythonic** - following Python's idioms, conventions, an
 9. **Practicality Beats Purity**: Use what works, not dogmatic approaches
 10. **Errors Should Never Pass Silently**: Fail fast with clear messages
 11. **In the Face of Ambiguity, Refuse to Guess**: Clear validation rejects ambiguous inputs
-12. **One Obvious Way**: `matcher.match_exact()` is the obvious way, not multiple execution methods
+12. **One Obvious Way**: `matcher.match()` is the obvious way, not multiple execution methods
 13. **If Hard to Explain, it's a Bad Idea**: Core logic should be explainable
 14. **Namespaces are One Honking Great Idea**: `matcher.core` provides clear namespaces
 
@@ -122,10 +126,10 @@ matcher code should be **Pythonic** - following Python's idioms, conventions, an
 ```python
 # Test and compare approaches
 matcher_exact = Matcher(..., matching_algorithm=ExactMatcher())
-metrics_exact = matcher_exact.match_exact(field="email").evaluate(ground_truth)
+metrics_exact = matcher_exact.match(field="email").evaluate(ground_truth)
 
 matcher_ci = Matcher(..., matching_algorithm=CaseInsensitiveExactMatcher())
-metrics_ci = matcher_ci.match_exact(field="email").evaluate(ground_truth)
+metrics_ci = matcher_ci.match(field="email").evaluate(ground_truth)
 
 # Choose based on evidence
 if metrics_ci['recall'] > metrics_exact['recall']:
@@ -202,7 +206,7 @@ matcher = Matcher(left_source="data/customers.parquet")
 ### Matching & Evaluation
 ```python
 # Exact matching
-results = matcher.match_exact(field="email")
+results = matcher.match(field="email")
 
 # Evaluate against ground truth
 metrics = results.evaluate(ground_truth)

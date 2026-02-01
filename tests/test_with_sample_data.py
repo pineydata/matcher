@@ -14,14 +14,32 @@ def sample_data_dir():
 
 def test_entity_resolution_with_sample_data(sample_data_dir):
     """Test entity resolution with generated sample data."""
-    left_path = sample_data_dir / "customers_a.parquet"
-    right_path = sample_data_dir / "customers_b.parquet"
+    left_path = sample_data_dir / "ExactMatcher" / "entity_resolution" / "customers_a.parquet"
+    right_path = sample_data_dir / "ExactMatcher" / "entity_resolution" / "customers_b.parquet"
 
-    matcher = Matcher(left_source=str(left_path), right_source=str(right_path))
-    results = matcher.match_exact(field="email")
+    left_df = pl.read_parquet(left_path)
+    right_df = pl.read_parquet(right_path)
+    matcher = Matcher(left=left_df, right=right_df)
 
-    # Should find 30 known matches
-    assert results.count == 30, f"Expected 30 matches, got {results.count}"
+    # Email-only rule: should find 10 email-only + 10 mixed = 20 matches
+    # (multi-field matches use address+zip, not email, so they don't match on email alone)
+    results = matcher.match(rules="email")
+    assert results.count == 20, f"Expected 20 matches with email rule, got {results.count}"
+
+    # Name-only rule: should find at least 10 name-only + 10 mixed = 20 matches
+    # (may find more due to overlaps with other match types)
+    results = matcher.match(rules=["first_name", "last_name"])
+    assert results.count >= 20, f"Expected at least 20 matches with name rule, got {results.count}"
+
+    # Multi-field rule: should find at least 10 multi-field matches (address + zip_code)
+    # (may find more due to overlaps with mixed matches)
+    results = matcher.match(rules=["address", "zip_code"])
+    assert results.count >= 10, f"Expected at least 10 matches with address+zip rule, got {results.count}"
+
+    # Multiple rules (OR): should find all 40 matches
+    # Need to include address+zip to find multi-field matches
+    results = matcher.match(rules=["email", ["first_name", "last_name"], ["address", "zip_code"]])
+    assert results.count >= 40, f"Expected at least 40 matches with OR rules, got {results.count}"
 
     # Verify matches are correct (all should have same email)
     for row in results.matches.iter_rows(named=True):
@@ -31,10 +49,11 @@ def test_entity_resolution_with_sample_data(sample_data_dir):
 
 def test_deduplication_with_sample_data(sample_data_dir):
     """Test deduplication with generated sample data."""
-    source_path = sample_data_dir / "customers.parquet"
+    source_path = sample_data_dir / "ExactMatcher" / "deduplication" / "customers.parquet"
 
-    matcher = Matcher(left_source=str(source_path))
-    results = matcher.match_exact(field="email")
+    df = pl.read_parquet(source_path)
+    matcher = Matcher(left=df)
+    results = matcher.match(rules="email")
 
     # Should find 50 duplicate pairs
     # Note: self-join creates pairs, so we expect matches
@@ -47,26 +66,24 @@ def test_deduplication_with_sample_data(sample_data_dir):
 
 def test_entity_resolution_ground_truth_validation(sample_data_dir):
     """Validate that we find all known matches from ground truth."""
-    left_path = sample_data_dir / "customers_a.parquet"
-    right_path = sample_data_dir / "customers_b.parquet"
+    left_path = sample_data_dir / "ExactMatcher" / "entity_resolution" / "customers_a.parquet"
+    right_path = sample_data_dir / "ExactMatcher" / "entity_resolution" / "customers_b.parquet"
 
     # Load data
     left_df = pl.read_parquet(left_path)
     right_df = pl.read_parquet(right_path)
 
-    # Known matches: first 30 records in each dataset have matching emails
+    # Known matches: first 40 records in each dataset are paired
+    # They match on different rules (email, name, email+zip, or mixed)
     known_matches = []
-    for i in range(30):
+    for i in range(40):
         left_id = f"left_{i+1}"
         right_id = f"right_{i+1}"
-        left_email = left_df.filter(pl.col("id") == left_id)["email"][0]
-        right_email = right_df.filter(pl.col("id") == right_id)["email"][0]
-        assert left_email == right_email, f"Emails should match for known pair {i+1}"
-        known_matches.append((left_id, right_id, left_email))
+        known_matches.append((left_id, right_id))
 
-    # Run matching
-    matcher = Matcher(left_source=str(left_path), right_source=str(right_path))
-    results = matcher.match_exact(field="email")
+    # Run matching with OR rules to find all matches (include address+zip for multi-field matches)
+    matcher = Matcher(left=left_df, right=right_df)
+    results = matcher.match(rules=["email", ["first_name", "last_name"], ["address", "zip_code"]])
 
     # Verify we found all known matches
     found_pairs = set()
@@ -76,6 +93,11 @@ def test_entity_resolution_ground_truth_validation(sample_data_dir):
         if left_id and right_id:
             found_pairs.add((left_id, right_id))
 
-    # Check that we found matches for known pairs
-    # (exact matching depends on how join preserves IDs)
-    assert results.count == 30, f"Should find exactly 30 matches, got {results.count}"
+    # Check that we found matches for all known pairs
+    expected_pairs = set(known_matches)
+    missing = expected_pairs - found_pairs
+    extra = found_pairs - expected_pairs
+
+    # Some extra matches are expected (e.g., multi-field matches also match on email alone)
+    assert len(missing) == 0, f"Missing matches: {missing}"
+    assert results.count >= 40, f"Should find at least 40 matches, got {results.count}"

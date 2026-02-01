@@ -1,7 +1,7 @@
 [project]
-name = "matcher"
+name = "hygge-match"
 version = "0.1.0"
-description = "A simple Python library for entity resolution and deduplication"
+description = "A cozy, comfortable Python library for entity resolution and deduplication"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [

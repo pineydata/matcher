@@ -1,57 +1,94 @@
-# Matcher
+# hygge-match
 
-A simple Python library for entity resolution and deduplication.
+![hygge logo](hygge.svg)
+
+A cozy, comfortable matching library that makes entity resolution and deduplication feel natural.
+
+## Philosophy
+
+hygge (pronounced "hoo-ga") is a Danish word representing comfort, coziness, and well-being. This library brings those qualities to entity resolution and deduplication:
+
+- **Comfort**: You should relax while you match some records.
+- **Simplicity**: Clean, intuitive APIs that feel natural
+- **Reliability**: Robust, predictable behavior without surprises
+- **Flow**: Smooth, efficient matching without friction
 
 ## Overview
 
-Matcher is a lightweight library for matching records across data sources (entity resolution) and identifying duplicate records within a single source (deduplication).
+hygge-match is a lightweight library for matching records across data sources (entity resolution) and identifying duplicate records within a single source (deduplication). Built on **Polars** for optimal performance, it provides a cozy, notebook-friendly API that makes matching feel natural and comfortable.
+
+### Built on Polars
+
+hygge-match is built on **Polars** for optimal matching performance. This provides:
+
+- Efficient columnar operations for large datasets
+- Automatic parallelization of joins
+- Clean, intuitive API that feels natural
+- Zero-copy operations where possible
+
+We chose Polars because it provides the best balance of performance, developer experience, and reliability for matching workflows.
 
 **Key Design Principles:**
-- **KISS (Keep It Simple, Stupid)**: Start with the absolute minimum, add complexity only when proven necessary
-- **YAGNI (You Aren't Gonna Need It)**: Don't build features until you have a real, current use case
-- **Library-First**: Python API optimized for notebooks, not CLI-first
-- **Data-Driven Decisions**: Compare approaches, measure results, and make decisions based on evidence, not assumptions
+
+- **Comfort Over Complexity**: APIs should feel natural and intuitive
+- **Flow Over Force**: Matching should work smoothly between data sources
+- **Reliability Over Speed**: Prefer robust, predictable behavior
+- **Clarity Over Cleverness**: Simple, clear code over complex optimizations
+- **Progress over Perfection**: Ship working solutions that solve real problems
 
 ## Installation
 
 ```bash
-uv add matcher
+uv add hygge-match
 ```
 
 Or with pip:
+
 ```bash
-pip install matcher
+pip install hygge-match
 ```
 
 ## Quick Start
 
 ```python
+import polars as pl
 from matcher import Matcher
 
-# Entity resolution (using default components)
-matcher = Matcher(
-    left_source="data/customers_a.parquet",
-    right_source="data/customers_b.parquet"
-)
+# Load data (you load DataFrames, matcher operates on them)
+left_df = pl.read_parquet("data/ExactMatcher/entity_resolution/customers_a.parquet")
+right_df = pl.read_parquet("data/ExactMatcher/entity_resolution/customers_b.parquet")
 
-results = matcher.match_exact(field="email")
+# Entity resolution (using default components)
+matcher = Matcher(left=left_df, right=right_df)
+results = matcher.match(rules="email")
 print(f"Found {results.count} matches")
 results.matches.head(10)
 
-# Deduplication
-matcher = Matcher(left_source="data/customers.parquet")
-results = matcher.match_exact(field="email")
+# Deduplication (single source)
+df = pl.read_parquet("data/ExactMatcher/deduplication/customers.parquet")
+matcher = Matcher(left=df)
+results = matcher.match(rules="email")
 print(f"Found {results.count} duplicate pairs")
+
+# Multiple matching rules (OR logic)
+# Match if email OR (first_name AND last_name)
+results = matcher.match(rules=[
+    "email",
+    ["first_name", "last_name"]
+])
 ```
 
 ## Data-Driven Development Philosophy
 
-**Matcher is built for experimentation and comparison.** The ability to swap components, test different approaches, and measure results is foundational to matcher's design. This enables data-driven decisions about which matching strategies work best for your specific use case.
+**hygge-match is built for experimentation and comparison.** The ability to swap components, test different approaches, and measure results is foundational to hygge-match's design. This enables data-driven decisions about which matching strategies work best for your specific use case.
+
+Like a cozy experiment, you can try different approaches, see what feels right, and choose what works best for your data.
 
 ### Why Component-Based Architecture?
 
 The component-based architecture (similar to scikit-learn) enables you to:
-- **Compare approaches**: Swap matching algorithms, data loaders, or evaluators to test alternatives
+
+- **Compare approaches**: Swap matching algorithms or evaluators to test alternatives
 - **Measure impact**: Use built-in evaluation to quantify which approach performs better
 - **Make informed decisions**: Choose components based on actual results, not assumptions
 - **Iterate quickly**: Test new ideas without rewriting core logic
@@ -62,26 +99,28 @@ The component-based architecture (similar to scikit-learn) enables you to:
 from matcher import Matcher, ExactMatcher, SimpleEvaluator
 import polars as pl
 
-# Load ground truth for evaluation
+# Load data
+left_df = pl.read_parquet("data/ExactMatcher/entity_resolution/customers_a.parquet")
+right_df = pl.read_parquet("data/ExactMatcher/entity_resolution/customers_b.parquet")
 ground_truth = pl.read_parquet("data/ground_truth.parquet")
 
 # Test exact matching
 matcher_exact = Matcher(
-    left_source="data/customers_a.parquet",
-    right_source="data/customers_b.parquet",
+    left=left_df,
+    right=right_df,
     matching_algorithm=ExactMatcher()
 )
-results_exact = matcher_exact.match_exact(field="email")
+results_exact = matcher_exact.match(rules="email")
 metrics_exact = results_exact.evaluate(ground_truth)
 
 # Test case-insensitive matching (custom algorithm)
 from examples.component_usage import CaseInsensitiveExactMatcher
 matcher_case_insensitive = Matcher(
-    left_source="data/customers_a.parquet",
-    right_source="data/customers_b.parquet",
+    left=left_df,
+    right=right_df,
     matching_algorithm=CaseInsensitiveExactMatcher()
 )
-results_ci = matcher_case_insensitive.match_exact(field="email")
+results_ci = matcher_case_insensitive.match(rules="email")
 metrics_ci = results_ci.evaluate(ground_truth)
 
 # Compare results
@@ -92,46 +131,50 @@ print(f"Case-insensitive: Precision={metrics_ci['precision']:.2%}, Recall={metri
 
 ## Component-Based Architecture
 
-Matcher uses a component-based architecture (similar to scikit-learn), allowing you to customize data loading and matching algorithms:
+hygge-match uses a component-based architecture (similar to scikit-learn), allowing you to customize matching algorithms:
 
 ```python
-from matcher import Matcher, DataLoader, MatchingAlgorithm
+from matcher import Matcher, MatchingAlgorithm
+import polars as pl
 
-# Use custom components
-class MyCustomLoader(DataLoader):
-    def load(self, source):
-        # Your custom loading logic
-        pass
-
+# Use custom matching algorithm
 class MyCustomMatcher(MatchingAlgorithm):
-    def match(self, left, right, field):
+    def match(self, left, right, rule):
         # Your custom matching logic
+        # rule is a list of fields (e.g., ["email"] or ["first_name", "last_name"])
+        # Return a DataFrame with matches
         pass
 
+# Load data
+left_df = pl.read_parquet("data/ExactMatcher/entity_resolution/customers_a.parquet")
+right_df = pl.read_parquet("data/ExactMatcher/entity_resolution/customers_b.parquet")
+
+# Use custom algorithm
 matcher = Matcher(
-    left_source="data/customers_a.parquet",
-    right_source="data/customers_b.parquet",
-    data_loader=MyCustomLoader(),
+    left=left_df,
+    right=right_df,
     matching_algorithm=MyCustomMatcher()
 )
+results = matcher.match(rules="email")
 ```
 
 See `examples/component_usage.py` for more examples.
 
 ## Evaluation & Measurement
 
-Matcher includes built-in evaluation capabilities to measure matching performance:
+hygge-match includes built-in evaluation capabilities to measure matching performance:
 
 ```python
 from matcher import Matcher
 import polars as pl
 
+# Load data
+left_df = pl.read_parquet("data/ExactMatcher/entity_resolution/customers_a.parquet")
+right_df = pl.read_parquet("data/ExactMatcher/entity_resolution/customers_b.parquet")
+
 # Run matching
-matcher = Matcher(
-    left_source="data/customers_a.parquet",
-    right_source="data/customers_b.parquet"
-)
-results = matcher.match_exact(field="email")
+matcher = Matcher(left=left_df, right=right_df)
+results = matcher.match(rules="email")
 
 # Evaluate against ground truth
 ground_truth = pl.DataFrame({
@@ -146,6 +189,7 @@ print(f"F1 Score: {metrics['f1']:.2%}")
 ```
 
 Use evaluation to:
+
 - **Compare approaches**: Test different algorithms and choose the best performer
 - **Validate improvements**: Measure impact before committing to a new approach
 - **Track quality**: Monitor matching quality as you iterate
@@ -165,18 +209,52 @@ uv run pytest
 
 ### Test Data
 
-The project includes sample datasets for validation:
+The project includes sample datasets organized by component:
 
-- **Entity Resolution**: `data/customers_a.parquet` and `data/customers_b.parquet`
-  - 500 records each
-  - 30 known matches (documented in `data/ground_truth_entity_resolution.md`)
+- **ExactMatcher** (`data/ExactMatcher/`):
+  - **Entity Resolution** (`entity_resolution/`):
+    - `customers_a.parquet` and `customers_b.parquet` - 500 records each
+    - 40 known matches with exotic matching scenarios (documented in `ground_truth.md`)
+    - Tests various matching rules: email-only, name-only, address+zip, mixed
+  - **Deduplication** (`deduplication/`):
+    - `customers.parquet` - 1000 records
+    - 50 known duplicate pairs (documented in `ground_truth.md`)
+  - **Evaluation** (`evaluation/`):
+    - `customers_a.parquet` and `customers_b.parquet` - 50 records each
+    - 30 simple email matches for stable evaluation testing
 
-- **Deduplication**: `data/customers.parquet`
-  - 1000 records
-  - 50 known duplicate pairs (documented in `data/ground_truth_deduplication.md`)
+- **SimpleEvaluator** (`data/SimpleEvaluator/`):
+  - **Evaluation** (`evaluation/`):
+    - Test datasets for evaluator component testing
 
 Regenerate test data with: `uv run python scripts/generate_test_data.py`
 
 ## Documentation
 
 See `MATCHING_PLAN_V2.md` for the implementation plan and `CLAUDE.md` for development guidelines.
+
+## Design Principles
+
+hygge-match follows hygge philosophy in its design:
+
+1. **Comfort Over Complexity**
+   - APIs should feel natural and intuitive
+   - Configuration should be simple but flexible
+   - Defaults should "just work"
+
+2. **Flow Over Force**
+   - Matching should work smoothly between data sources
+   - Results should be immediately explorable
+   - Progress should be visible but unobtrusive
+
+3. **Reliability Over Speed**
+   - Prefer robust, predictable behavior
+   - Handle errors gracefully
+   - Make recovery simple
+
+4. **Clarity Over Cleverness**
+   - Simple, clear code over complex optimizations
+   - Explicit configuration over implicit behavior
+   - Clear error messages and helpful guidance
+
+hygge-match isn't just about matching records - it's about making entity resolution and deduplication feel natural, comfortable, and reliable. Like a warm blanket for your data matching needs.
