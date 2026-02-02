@@ -3,7 +3,7 @@
 import polars as pl
 import pytest
 from pathlib import Path
-from matcher import Matcher, SimpleEvaluator
+from matcher import Matcher, Deduplicator, SimpleEvaluator
 
 
 @pytest.fixture
@@ -21,7 +21,7 @@ def test_evaluation_with_entity_resolution(sample_data_dir):
     # Load data and create matcher
     left_df = pl.read_parquet(left_path)
     right_df = pl.read_parquet(right_path)
-    matcher = Matcher(left=left_df, right=right_df)
+    matcher = Matcher(left=left_df, right=right_df, left_id="id", right_id="id")
     results = matcher.match(rules="email")
 
     # Create ground truth DataFrame - simple: first 30 records match on email
@@ -49,10 +49,10 @@ def test_evaluation_with_deduplication(sample_data_dir):
     """Test evaluation metrics for deduplication."""
     source_path = sample_data_dir / "ExactMatcher" / "deduplication" / "customers.parquet"
 
-    # Load data and create matcher
+    # Load data and create deduplicator
     df = pl.read_parquet(source_path)
-    matcher = Matcher(left=df)
-    results = matcher.match(rules="email")
+    deduplicator = Deduplicator(source=df, id_col="id")
+    results = deduplicator.match(rules="email")
 
     # For deduplication, we need to create ground truth from known duplicate groups
     # Load the data to understand the structure
@@ -78,11 +78,11 @@ def test_evaluation_with_deduplication(sample_data_dir):
     if ground_truth_data:
         ground_truth = pl.DataFrame(ground_truth_data)
 
-        # Evaluate (for deduplication, right_id_col is "id_match")
+        # Evaluate (for deduplication, right_id_col is "id_right")
         metrics = results.evaluate(
             ground_truth,
             left_id_col="id",
-            right_id_col="id_match"
+            right_id_col="id_right"
         )
 
         # Should have some matches
@@ -99,7 +99,7 @@ def test_evaluation_with_custom_evaluator(sample_data_dir):
 
     left_df = pl.read_parquet(left_path)
     right_df = pl.read_parquet(right_path)
-    matcher = Matcher(left=left_df, right=right_df)
+    matcher = Matcher(left=left_df, right=right_df, left_id="id", right_id="id")
     results = matcher.match(rules="email")
 
     # Create ground truth - simple: first 30 records match on email
@@ -129,7 +129,7 @@ def test_evaluation_with_parquet_ground_truth(sample_data_dir, tmp_path):
 
     left_df = pl.read_parquet(left_path)
     right_df = pl.read_parquet(right_path)
-    matcher = Matcher(left=left_df, right=right_df)
+    matcher = Matcher(left=left_df, right=right_df, left_id="id", right_id="id")
     results = matcher.match(rules="email")
 
     # Create and save ground truth to parquet - simple: first 30 records match on email
@@ -158,7 +158,7 @@ def test_evaluation_error_handling(sample_data_dir):
 
     left_df = pl.read_parquet(left_path)
     right_df = pl.read_parquet(right_path)
-    matcher = Matcher(left=left_df, right=right_df)
+    matcher = Matcher(left=left_df, right=right_df, left_id="id", right_id="id")
     results = matcher.match(rules="email")
 
     # Ground truth with wrong column names

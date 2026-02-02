@@ -4,6 +4,7 @@ import polars as pl
 import pytest
 from matcher import (
     Matcher,
+    Deduplicator,
     MatchingAlgorithm,
     ExactMatcher,
     SimpleEvaluator,
@@ -19,7 +20,7 @@ class TestMatchingAlgorithm:
         right = pl.DataFrame({"id": [3, 4], "email": ["a@test.com", "c@test.com"]})
 
         matcher = ExactMatcher()
-        results = matcher.match(left, right, ["email"])
+        results = matcher.match(left, right, ["email"], "id", "id")
         # Results are now DataFrame (in-memory only)
 
         assert results.height == 1
@@ -33,30 +34,31 @@ class TestMatchingAlgorithm:
         })
 
         matcher = ExactMatcher()
-        results = matcher.match(df, None, ["email"])
+        # For deduplication, pass cloned DataFrame
+        results = matcher.match(df, df.clone(), ["email"], "id", "id")
         # Results are now DataFrame (in-memory only)
 
         # Should find duplicate pair (id 1 and 2 have same email)
         assert results.height > 0
 
     def test_exact_matcher_deduplication_no_id_column(self):
-        """Test Matcher requires id column for deduplication."""
+        """Test Deduplicator requires id column."""
         df = pl.DataFrame({
             "email": ["a@test.com", "a@test.com", "b@test.com"],
             "name": ["Alice", "Alice", "Bob"]
         })
 
-        # Matcher requires id column
+        # Deduplicator requires id column
         with pytest.raises(ValueError, match="MUST have 'id' column"):
-            matcher = Matcher(left=df)
+            deduplicator = Deduplicator(source=df, id_col="id")
 
         # Add id column and it should work
         df_with_id = df.with_row_index("id")
-        matcher = Matcher(left=df_with_id)
-        results = matcher.match(rules=["email"])
+        deduplicator = Deduplicator(source=df_with_id, id_col="id")
+        results = deduplicator.match(rules=["email"])
 
         # Should find duplicate pair (a@test.com appears twice)
-        # Matcher filters self-matches, so we get 2 match rows (both directions)
+        # Deduplicator filters self-matches, so we get 2 match rows (both directions)
         assert results.count == 2
         # Verify it's the duplicate email
         assert results.matches["email"][0] == "a@test.com"
@@ -76,7 +78,7 @@ class TestMatchingAlgorithm:
         })
 
         matcher = ExactMatcher()
-        results = matcher.match(left, right, ["email", "zip_code"])
+        results = matcher.match(left, right, ["email", "zip_code"], "id", "id")
         # Results are now DataFrame (in-memory only)
 
         # Should find 1 match: (a@test.com, 10001)
@@ -92,12 +94,12 @@ class TestMatchingAlgorithm:
             "zip_code": ["10001", "10001", "10002"]
         })
 
-        # Use Matcher instead of ExactMatcher directly (Matcher filters self-matches)
-        matcher = Matcher(left=df)
-        results = matcher.match(rules=[["email", "zip_code"]])
+        # Use Deduplicator instead of ExactMatcher directly (Deduplicator filters self-matches)
+        deduplicator = Deduplicator(source=df, id_col="id")
+        results = deduplicator.match(rules=[["email", "zip_code"]])
 
         # Should find duplicate pair (id 1 and 2 match on both email and zip_code)
-        # Matcher filters self-matches, so we get 2 match rows
+        # Deduplicator filters self-matches, so we get 2 match rows
         assert results.count == 2
         # Verify both matches have same email and zip_code
         assert results.matches["email"][0] == "a@test.com"
@@ -112,7 +114,7 @@ class TestComponentComposition:
         left = pl.DataFrame({"id": [1, 2], "email": ["a@test.com", "b@test.com"]})
         right = pl.DataFrame({"id": [3, 4], "email": ["a@test.com", "c@test.com"]})
 
-        matcher = Matcher(left=left, right=right)
+        matcher = Matcher(left=left, right=right, left_id="id", right_id="id")
 
         # Should use default matching algorithm
         assert isinstance(matcher.matching_algorithm, ExactMatcher)
@@ -122,7 +124,7 @@ class TestComponentComposition:
         left_df = pl.DataFrame({"id": [1, 2], "email": ["a@test.com", "b@test.com"]})
         right_df = pl.DataFrame({"id": [3, 4], "email": ["a@test.com", "c@test.com"]})
 
-        matcher = Matcher(left=left_df, right=right_df)
+        matcher = Matcher(left=left_df, right=right_df, left_id="id", right_id="id")
 
         # Data should be DataFrames (in-memory)
         assert isinstance(matcher.left, pl.DataFrame)
@@ -134,7 +136,7 @@ class TestComponentComposition:
     def test_custom_matching_algorithm(self):
         """Test Matcher with custom MatchingAlgorithm."""
         class TestMatcher(MatchingAlgorithm):
-            def match(self, left, right, rule):
+            def match(self, left, right, rule, left_id, right_id):
                 # Always return empty matches
                 return pl.DataFrame()
 
@@ -145,6 +147,8 @@ class TestComponentComposition:
         matcher = Matcher(
             left=left,
             right=right,
+            left_id="id",
+            right_id="id",
             matching_algorithm=algorithm
         )
 
@@ -155,7 +159,7 @@ class TestComponentComposition:
     def test_custom_matching_algorithm_with_data(self):
         """Test Matcher with custom MatchingAlgorithm."""
         class TestMatcher(MatchingAlgorithm):
-            def match(self, left, right, rule):
+            def match(self, left, right, rule, left_id, right_id):
                 # Return a single match
                 return pl.DataFrame({"id": [1], "email": ["test@test.com"]})
 
@@ -165,6 +169,8 @@ class TestComponentComposition:
         matcher = Matcher(
             left=left,
             right=right,
+            left_id="id",
+            right_id="id",
             matching_algorithm=TestMatcher()
         )
 
@@ -183,14 +189,14 @@ class TestComponentEdgeCases:
 
         # Error should be raised during initialization
         with pytest.raises(ValueError, match="Left source is empty"):
-            matcher = Matcher(left=empty_df)
+            matcher = Matcher(left=empty_df, right=empty_df, left_id="id", right_id="id")
 
     def test_algorithm_with_missing_field(self):
         """Test that algorithm receives correct field even if validation fails."""
         left = pl.DataFrame({"id": [1, 2], "email": ["a@test.com", "b@test.com"]})
         right = pl.DataFrame({"id": [3, 4], "email": ["a@test.com", "c@test.com"]})
 
-        matcher = Matcher(left=left, right=right)
+        matcher = Matcher(left=left, right=right, left_id="id", right_id="id")
 
         # Should raise error before algorithm is called
         with pytest.raises(ValueError, match="Field\\(s\\) .* not found in left source"):
@@ -199,12 +205,11 @@ class TestComponentEdgeCases:
     def test_deduplication_with_custom_algorithm(self):
         """Test deduplication with custom algorithm."""
         class DedupMatcher(MatchingAlgorithm):
-            def match(self, left, right, rule):
+            def match(self, left, right, rule, left_id, right_id):
                 # Custom deduplication logic - simplified for testing
-                # Note: Matcher now sets right = left.clone() for deduplication, so right is never None
                 # For this test, return matches for all rows (custom logic would filter)
                 field = rule[0] if len(rule) > 0 else "id"
-                # Join to create matches (will include self-matches which Matcher filters)
+                # Join to create matches (will include self-matches which Deduplicator filters)
                 # This will match: 1->1, 1->2, 2->1, 2->2, 3->3, 4->4
                 # After filtering self-matches: 1->2, 2->1 (the duplicate email)
                 return left.join(right, on=field, how="inner")
@@ -214,18 +219,19 @@ class TestComponentEdgeCases:
             "email": ["a@test.com", "a@test.com", "b@test.com", "c@test.com"]
         })
 
-        matcher = Matcher(
-            left=df,
+        deduplicator = Deduplicator(
+            source=df,
+            id_col="id",
             matching_algorithm=DedupMatcher()
         )
 
-        results = matcher.match(rules="email")
+        results = deduplicator.match(rules="email")
         # Custom algorithm returns matches for all rows on email
-        # After Matcher filters self-matches (id == id_right), we get:
+        # After Deduplicator filters self-matches (id == id_right), we get:
         # - 1->2 and 2->1 (duplicate email matches)
         # So 2 matches total
         assert results.count == 2
-        assert isinstance(matcher.matching_algorithm, DedupMatcher)
+        assert isinstance(deduplicator._matcher.matching_algorithm, DedupMatcher)
 
 
 class TestSimpleEvaluator:

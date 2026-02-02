@@ -3,7 +3,7 @@
 import polars as pl
 import pytest
 from pathlib import Path
-from matcher import Matcher
+from matcher import Matcher, Deduplicator
 
 
 @pytest.fixture
@@ -19,7 +19,7 @@ def test_entity_resolution_with_sample_data(sample_data_dir):
 
     left_df = pl.read_parquet(left_path)
     right_df = pl.read_parquet(right_path)
-    matcher = Matcher(left=left_df, right=right_df)
+    matcher = Matcher(left=left_df, right=right_df, left_id="id", right_id="id")
 
     # Email-only rule: should find 10 email-only + 10 mixed = 20 matches
     # (multi-field matches use address+zip, not email, so they don't match on email alone)
@@ -52,8 +52,8 @@ def test_deduplication_with_sample_data(sample_data_dir):
     source_path = sample_data_dir / "ExactMatcher" / "deduplication" / "customers.parquet"
 
     df = pl.read_parquet(source_path)
-    matcher = Matcher(left=df)
-    results = matcher.match(rules="email")
+    deduplicator = Deduplicator(source=df, id_col="id")
+    results = deduplicator.match(rules="email")
 
     # Should find 50 duplicate pairs
     # Note: self-join creates pairs, so we expect matches
@@ -82,14 +82,14 @@ def test_entity_resolution_ground_truth_validation(sample_data_dir):
         known_matches.append((left_id, right_id))
 
     # Run matching with OR rules to find all matches (include address+zip for multi-field matches)
-    matcher = Matcher(left=left_df, right=right_df)
+    matcher = Matcher(left=left_df, right=right_df, left_id="id", right_id="id")
     results = matcher.match(rules=["email", ["first_name", "last_name"], ["address", "zip_code"]])
 
     # Verify we found all known matches
     found_pairs = set()
     for row in results.matches.iter_rows(named=True):
-        left_id = row.get("id") or row.get("id_left")
-        right_id = row.get("id_right") or row.get("id_match")
+        left_id = row.get("id")
+        right_id = row.get("id_right")
         if left_id and right_id:
             found_pairs.add((left_id, right_id))
 

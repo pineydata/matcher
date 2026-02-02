@@ -154,6 +154,17 @@ if metrics_ci['recall'] > metrics_exact['recall']:
 - Think like a data engineer: outcomes and impact matter more than perfection
 - Make progress, not perfection: ship working solutions
 
+**Documentation Standards:**
+- **Module Docstrings**: All module docstrings (at the top of each `.py` file) should be comprehensive and kept up to date. They serve as primary documentation for LLM comprehension and should include:
+  - Clear purpose statements
+  - Key concepts and terminology
+  - Usage patterns with code examples
+  - Relationships to other modules
+  - Important design decisions
+  - Dependencies and integration points
+- When modifying modules, update the module docstring to reflect changes in functionality, usage patterns, or design decisions
+- Module docstrings are especially important for AI assistants to understand the codebase structure and usage patterns
+
 ---
 
 ## Development Guidelines
@@ -191,27 +202,66 @@ Stop adding features when:
 
 ## Common Patterns
 
-### Loading Data
+### Loading Data & Entity Resolution
 ```python
-# From file paths
-matcher = Matcher(left_source="data/a.parquet", right_source="data/b.parquet")
+import polars as pl
+from matcher import Matcher
 
-# From Polars DataFrames
-matcher = Matcher(left_source=df1, right_source=df2)
+# Load DataFrames (users load data, matcher operates on them)
+left_df = pl.read_parquet("data/customers_a.parquet")
+right_df = pl.read_parquet("data/customers_b.parquet")
 
-# Deduplication (single source)
-matcher = Matcher(left_source="data/customers.parquet")
+# Entity resolution (requires left_id and right_id parameters)
+matcher = Matcher(
+    left=left_df,
+    right=right_df,
+    left_id="id",      # Column name for left source ID
+    right_id="id"      # Column name for right source ID
+)
+```
+
+### Deduplication
+```python
+import polars as pl
+from matcher import Deduplicator
+
+# Load single source
+df = pl.read_parquet("data/customers.parquet")
+
+# Deduplication (single source, uses Matcher internally)
+deduplicator = Deduplicator(
+    source=df,
+    id_col="id"        # Column name for source ID
+)
 ```
 
 ### Matching & Evaluation
 ```python
-# Exact matching
-results = matcher.match(field="email")
+# Exact matching (works for both Matcher and Deduplicator)
+results = matcher.match(rules="email")
+# Or multiple rules
+results = matcher.match(rules=["email", ["first_name", "last_name"]])
 
 # Evaluate against ground truth
 metrics = results.evaluate(ground_truth)
 print(f"Precision: {metrics['precision']:.2%}, Recall: {metrics['recall']:.2%}")
 ```
+
+---
+
+## Project Execution & Testing
+
+This is a **uv project**. Use `uv run` to execute commands:
+
+```bash
+# Run tests
+uv run python -m pytest tests/ -v
+
+# Run scripts
+uv run python scripts/generate_test_data.py
+```
+
+Or activate the virtual environment first: `source .venv/bin/activate`
 
 ---
 

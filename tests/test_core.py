@@ -2,7 +2,7 @@
 
 import polars as pl
 import pytest
-from matcher import Matcher, MatchResults
+from matcher import Matcher, Deduplicator, MatchResults
 
 
 def test_matcher_initialization_with_dataframes():
@@ -10,7 +10,7 @@ def test_matcher_initialization_with_dataframes():
     left = pl.DataFrame({"id": [1, 2], "email": ["a@test.com", "b@test.com"]})
     right = pl.DataFrame({"id": [3, 4], "email": ["a@test.com", "c@test.com"]})
 
-    matcher = Matcher(left=left, right=right)
+    matcher = Matcher(left=left, right=right, left_id="id", right_id="id")
     # DataFrames stay as DataFrames (in-memory only)
     assert isinstance(matcher.left, pl.DataFrame)
     assert isinstance(matcher.right, pl.DataFrame)
@@ -24,7 +24,7 @@ def test_match_entity_resolution():
     left = pl.DataFrame({"id": [1, 2], "email": ["a@test.com", "b@test.com"]})
     right = pl.DataFrame({"id": [3, 4], "email": ["a@test.com", "c@test.com"]})
 
-    matcher = Matcher(left=left, right=right)
+    matcher = Matcher(left=left, right=right, left_id="id", right_id="id")
     results = matcher.match(rules="email")
 
     assert results.count == 1
@@ -36,7 +36,7 @@ def test_match_missing_field():
     left = pl.DataFrame({"id": [1, 2], "email": ["a@test.com", "b@test.com"]})
     right = pl.DataFrame({"id": [3, 4], "email": ["a@test.com", "c@test.com"]})
 
-    matcher = Matcher(left=left, right=right)
+    matcher = Matcher(left=left, right=right, left_id="id", right_id="id")
 
     with pytest.raises(ValueError, match="Field\\(s\\) .* not found in left source"):
         matcher.match(rules="name")
@@ -63,7 +63,7 @@ def test_match_multi_field_entity_resolution():
         "zip_code": ["10001", "10003", "10001"]  # Only first and third match on both fields
     })
 
-    matcher = Matcher(left=left, right=right)
+    matcher = Matcher(left=left, right=right, left_id="id", right_id="id")
     results = matcher.match(rules=["email", "zip_code"])
 
     # Should find 2 matches: (a@test.com, 10001) and (c@test.com, 10001)
@@ -81,8 +81,8 @@ def test_match_multi_field_deduplication():
         "zip_code": ["10001", "10001", "10002", "10003"]  # Only first two match on both fields
     })
 
-    matcher = Matcher(left=df)
-    results = matcher.match(rules=["email", "zip_code"])
+    deduplicator = Deduplicator(source=df, id_col="id")
+    results = deduplicator.match(rules=["email", "zip_code"])
 
     # Should find 1 duplicate pair: records 1 and 2 match on both email and zip_code
     # Records 3 and 4 have same email but different zip_code, so they don't match
@@ -96,7 +96,7 @@ def test_match_multi_field_missing_field():
     left = pl.DataFrame({"id": [1, 2], "email": ["a@test.com", "b@test.com"], "zip_code": ["10001", "10002"]})
     right = pl.DataFrame({"id": [3, 4], "email": ["a@test.com", "c@test.com"]})  # Missing zip_code
 
-    matcher = Matcher(left=left, right=right)
+    matcher = Matcher(left=left, right=right, left_id="id", right_id="id")
 
     with pytest.raises(ValueError, match="Field\\(s\\) .* not found in right source"):
         matcher.match(rules=["email", "zip_code"])
@@ -107,7 +107,7 @@ def test_match_multi_field_empty_list():
     left = pl.DataFrame({"id": [1, 2], "email": ["a@test.com", "b@test.com"]})
     right = pl.DataFrame({"id": [3, 4], "email": ["a@test.com", "c@test.com"]})
 
-    matcher = Matcher(left=left, right=right)
+    matcher = Matcher(left=left, right=right, left_id="id", right_id="id")
 
     with pytest.raises(ValueError, match="Rules must be"):
         matcher.match(rules=[])
@@ -128,7 +128,7 @@ def test_match_rules_entity_resolution():
         "last_name": ["Smith", "Y", "Brown"]
     })
 
-    matcher = Matcher(left=left, right=right)
+    matcher = Matcher(left=left, right=right, left_id="id", right_id="id")
     # Match if email OR (first_name AND last_name)
     results = matcher.match(rules=[
         ["email"],
@@ -153,9 +153,9 @@ def test_match_rules_deduplication():
         "last_name": ["Smith", "Jones", "Smith", "Frank"]
     })
 
-    matcher = Matcher(left=df)
+    deduplicator = Deduplicator(source=df, id_col="id")
     # Match if email OR (first_name AND last_name)
-    results = matcher.match(rules=[
+    results = deduplicator.match(rules=[
         ["email"],
         ["first_name", "last_name"]
     ])
@@ -174,7 +174,7 @@ def test_match_rules_empty_list():
     left = pl.DataFrame({"id": [1], "email": ["a@test.com"]})
     right = pl.DataFrame({"id": [2], "email": ["a@test.com"]})
 
-    matcher = Matcher(left=left, right=right)
+    matcher = Matcher(left=left, right=right, left_id="id", right_id="id")
 
     with pytest.raises(ValueError, match="Rules must be"):
         matcher.match(rules=[])
@@ -185,7 +185,7 @@ def test_match_rules_invalid_rule():
     left = pl.DataFrame({"id": [1], "email": ["a@test.com"]})
     right = pl.DataFrame({"id": [2], "email": ["a@test.com"]})
 
-    matcher = Matcher(left=left, right=right)
+    matcher = Matcher(left=left, right=right, left_id="id", right_id="id")
 
     with pytest.raises(ValueError, match="Each rule must contain at least one field"):
         matcher.match(rules=[[]])  # Empty rule
@@ -210,7 +210,7 @@ def test_match_rules_string_single_field():
         "last_name": ["Smith", "Brown"]
     })
 
-    matcher = Matcher(left=left, right=right)
+    matcher = Matcher(left=left, right=right, left_id="id", right_id="id")
     # Mix of string and list rules
     results = matcher.match(rules=[
         "email",  # string for single field
