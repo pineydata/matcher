@@ -52,22 +52,22 @@ pip install hygge-match
 
 ```python
 import polars as pl
-from matcher import Matcher
+from matcher import Matcher, Deduplicator
 
 # Load data (you load DataFrames, matcher operates on them)
 left_df = pl.read_parquet("data/ExactMatcher/entity_resolution/customers_a.parquet")
 right_df = pl.read_parquet("data/ExactMatcher/entity_resolution/customers_b.parquet")
 
 # Entity resolution (using default components)
-matcher = Matcher(left=left_df, right=right_df)
+matcher = Matcher(left=left_df, right=right_df, left_id="id", right_id="id")
 results = matcher.match(rules="email")
 print(f"Found {results.count} matches")
 results.matches.head(10)
 
 # Deduplication (single source)
 df = pl.read_parquet("data/ExactMatcher/deduplication/customers.parquet")
-matcher = Matcher(left=df)
-results = matcher.match(rules="email")
+deduplicator = Deduplicator(source=df, id_col="id")
+results = deduplicator.match(rules="email")
 print(f"Found {results.count} duplicate pairs")
 
 # Multiple matching rules (OR logic)
@@ -77,6 +77,10 @@ results = matcher.match(rules=[
     ["first_name", "last_name"]
 ])
 ```
+
+### Null handling
+
+Exact matching uses Polars inner joins. Rows where any join key (e.g. `email`, `first_name`) is null are excluded from matches—including null-to-null. Fill or drop nulls in your match columns beforehand if you need different behavior.
 
 ## Data-Driven Development Philosophy
 

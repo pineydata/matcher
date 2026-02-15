@@ -58,8 +58,7 @@ class Matcher:
         right: DataFrame,
         left_id: str,
         right_id: str,
-        matching_algorithm: Optional[MatchingAlgorithm] = None,
-        max_workers: Optional[int] = None
+        matching_algorithm: Optional[MatchingAlgorithm] = None
     ):
         """Initialize matcher with Polars DataFrames.
 
@@ -68,10 +67,8 @@ class Matcher:
             right: Polars DataFrame (in-memory) - MUST have right_id column
             left_id: Column name for left source ID
             right_id: Column name for right source ID
-            matching_algorithm: MatchingAlgorithm component (default: ExactMatcher)
-            max_workers: Maximum number of parallel workers for operations within a rule.
-                        Only used if the matching algorithm supports it (e.g., ExactMatcher).
-                        Defaults to None (uses CPU count). Set to 1 to disable parallelization.
+            matching_algorithm: MatchingAlgorithm component (default: ExactMatcher).
+                               Polars handles parallelization internally for joins.
 
         Raises:
             ValueError: If left or right DataFrames don't have the specified ID column
@@ -100,14 +97,10 @@ class Matcher:
         self.left = left
         self.right = right
 
-        # Initialize matching algorithm with max_workers if not provided and algorithm supports it
         if matching_algorithm is None:
-            self.matching_algorithm = ExactMatcher(max_workers=max_workers)
+            self.matching_algorithm = ExactMatcher()
         else:
             self.matching_algorithm = matching_algorithm
-            # If algorithm supports max_workers and it's not set, set it
-            if hasattr(self.matching_algorithm, 'max_workers') and max_workers is not None:
-                self.matching_algorithm.max_workers = max_workers
 
     def match(
         self,
