@@ -22,7 +22,6 @@ Design Notes:
 
 import polars as pl
 from polars import DataFrame
-from typing import Optional
 from abc import ABC, abstractmethod
 
 
@@ -57,16 +56,14 @@ class MatchingAlgorithm(ABC):
 
 
 class ExactMatcher(MatchingAlgorithm):
-    """Exact matching algorithm for entity resolution."""
+    """Exact matching algorithm for entity resolution.
 
-    def __init__(self, max_workers: Optional[int] = None):
-        """Initialize ExactMatcher.
+    Parallelization is handled internally by Polars (joins are parallelized).
+    """
 
-        Args:
-            max_workers: Maximum number of parallel workers for operations within a rule.
-                        Defaults to None (uses CPU count). Set to 1 to disable parallelization.
-        """
-        self.max_workers = max_workers
+    def __init__(self):
+        """Initialize ExactMatcher."""
+        pass
 
     def match(
         self,
@@ -78,6 +75,10 @@ class ExactMatcher(MatchingAlgorithm):
     ) -> DataFrame:
         """Exact matching via inner join on field(s) for a single rule.
 
+        Null handling: Polars inner joins exclude null values. Rows where any
+        join key is null do not match (including null-to-null). Fill or drop
+        nulls in join columns beforehand if you need different behavior.
+
         Args:
             left: Left source DataFrame
             right: Right source DataFrame
@@ -87,7 +88,9 @@ class ExactMatcher(MatchingAlgorithm):
             right_id: Column name for right source ID
 
         Returns:
-            DataFrame with matches for this rule, including left_id and {right_id}_right columns
+            DataFrame with matches for this rule, including left_id and {right_id}_right columns.
+            When a join key equals right_id, Polars may not add a separate right_id_right column;
+            this method adds it so the result always includes right_id_right for evaluation.
         """
         # Normalize to format expected by Polars join
         if len(rule) == 1:
@@ -98,7 +101,8 @@ class ExactMatcher(MatchingAlgorithm):
         # Join left and right on specified field(s)
         result = left.join(right, on=field, how="inner", suffix="_right")
 
-        # Ensure right_id_right exists for evaluation (if right_id column exists in right)
+        # When a join key equals right_id, Polars may not add right_id_right; add it so
+        # the result always has right_id_right for evaluation.
         right_id_right = f"{right_id}_right"
         if right_id in right.columns and right_id_right not in result.columns:
             # Add right_id_right by joining on the field(s) again

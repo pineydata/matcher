@@ -53,18 +53,15 @@ class Deduplicator:
         self,
         source: DataFrame,
         id_col: str,
-        matching_algorithm: Optional[MatchingAlgorithm] = None,
-        max_workers: Optional[int] = None
+        matching_algorithm: Optional[MatchingAlgorithm] = None
     ):
         """Initialize deduplicator with a single source DataFrame.
 
         Args:
             source: Polars DataFrame (in-memory) - MUST have id_col column
             id_col: Column name for source ID
-            matching_algorithm: MatchingAlgorithm component (default: ExactMatcher)
-            max_workers: Maximum number of parallel workers for operations within a rule.
-                        Only used if the matching algorithm supports it (e.g., ExactMatcher).
-                        Defaults to None (uses CPU count). Set to 1 to disable parallelization.
+            matching_algorithm: MatchingAlgorithm component (default: ExactMatcher).
+                               Polars handles parallelization internally for joins.
 
         Raises:
             ValueError: If source DataFrame doesn't have the specified ID column
@@ -75,8 +72,7 @@ class Deduplicator:
             right=source.clone(),
             left_id=id_col,
             right_id=id_col,
-            matching_algorithm=matching_algorithm,
-            max_workers=max_workers
+            matching_algorithm=matching_algorithm
         )
         self._id_col = id_col
 

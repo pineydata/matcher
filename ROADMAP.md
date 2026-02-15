@@ -1,6 +1,6 @@
 # hygge-match Roadmap
 
-**Last Updated:** 2024
+**Last Updated:** 2025
 **Current Phase:** Phase 1 Complete ✅
 **Next Phase:** TBD (Phase 2 Blocking or Phase 3 Fuzzy Matching)
 
@@ -55,7 +55,7 @@
 
 ### Priority: Medium
 
-#### 1. Remove `max_workers` Parameter
+#### 1. Remove `max_workers` Parameter ✅ Done
 
 **Issue:** Parameter exists but is not used. Polars handles parallelization internally.
 
@@ -76,7 +76,7 @@
 
 ### Priority: Low
 
-#### 2. Document Null Handling
+#### 2. Document Null Handling ✅ Done
 
 **Issue:** Polars inner joins exclude null values by default, but this behavior is not documented.
 
@@ -385,8 +385,8 @@ Simplify when:
 ## Next Steps
 
 1. **Immediate (This Week)**
-   - [ ] Remove `max_workers` parameter
-   - [ ] Document null handling behavior
+   - [x] Remove `max_workers` parameter
+   - [x] Document null handling behavior
    - [ ] Review roadmap with stakeholders
 
 2. **Short-term (Next 1-3 months)**
