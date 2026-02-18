@@ -344,6 +344,18 @@ class Matcher:
                 f"Field '{field}' not found in right source. Available: {self.right.columns}"
             )
 
+        # Fuzzy matching requires string columns (we use .str.to_lowercase() etc.)
+        left_dtype = self.left.schema[field]
+        right_dtype = self.right.schema[field]
+        if left_dtype != pl.Utf8:
+            raise ValueError(
+                f"Field '{field}' in left source must be a string (Utf8) column for fuzzy matching, got {left_dtype}"
+            )
+        if right_dtype != pl.Utf8:
+            raise ValueError(
+                f"Field '{field}' in right source must be a string (Utf8) column for fuzzy matching, got {right_dtype}"
+            )
+
         # Exclude nulls (same semantics as exact match)
         left_valid = self.left.filter(pl.col(field).is_not_null())
         right_valid = self.right.filter(pl.col(field).is_not_null())
@@ -387,7 +399,7 @@ class Matcher:
         pairs_data = {
             self.left_id: [left_id_list[int(r)] for r in rows],
             "_right_id_val": [right_id_list[int(c)] for c in cols],
-            "confidence": [float(matrix[rows[k], cols[k]]) for k in range(len(rows))],
+            "confidence": matrix[rows, cols].astype(float).tolist(),
         }
         pairs = pl.DataFrame(pairs_data)
 

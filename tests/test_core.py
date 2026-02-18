@@ -276,6 +276,15 @@ def test_match_fuzzy_missing_field_right():
         matcher.match_fuzzy(field="name", threshold=0.85)
 
 
+def test_match_fuzzy_non_string_field_raises():
+    """match_fuzzy raises when field is not a string (Utf8) column."""
+    left = pl.DataFrame({"id": [1], "name": ["Alice"], "age": [30]})
+    right = pl.DataFrame({"id": [2], "name": ["Bob"], "age": [25]})
+    matcher = Matcher(left=left, right=right, left_id="id", right_id="id")
+    with pytest.raises(ValueError, match="must be a string \\(Utf8\\) column"):
+        matcher.match_fuzzy(field="age", threshold=0.85)
+
+
 def test_match_fuzzy_threshold_validation():
     """match_fuzzy raises when threshold not in [0, 1]."""
     left = pl.DataFrame({"id": [1], "name": ["a"]})
@@ -295,6 +304,17 @@ def test_match_fuzzy_high_threshold_fewer_matches():
     low = matcher.match_fuzzy(field="name", threshold=0.5)
     high = matcher.match_fuzzy(field="name", threshold=0.99)
     assert low.count >= high.count
+
+
+def test_match_fuzzy_nulls_excluded():
+    """match_fuzzy excludes rows where the field is null (same as exact match)."""
+    left = pl.DataFrame({"id": [1, 2], "name": ["Alice", None]})
+    right = pl.DataFrame({"id": [3, 4], "name": ["Alicia", "Bob"]})
+    matcher = Matcher(left=left, right=right, left_id="id", right_id="id")
+    results = matcher.match_fuzzy(field="name", threshold=0.5)
+    # Row with null on left should not produce matches; only (1,3) can match
+    left_ids_in_results = results.matches["id"].to_list()
+    assert 2 not in left_ids_in_results, "Left row with null name should be excluded from matching"
 
 
 def test_match_fuzzy_empty_when_no_matches():

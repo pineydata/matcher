@@ -28,14 +28,16 @@ This document captures the implementation approach for Phase 3 (fuzzy matching),
 **Usage shape:**
 
 ```python
-from rapidfuzz import process, fuzz
+from rapidfuzz import process
+from rapidfuzz.distance import JaroWinkler
 
-# queries = left column (e.g. from NumPy/Arrow); choices = right column
+# queries = left column (e.g. from Arrow .to_pylist()); choices = right column
+# threshold in [0, 1]; score_cutoff filters to scores >= threshold
 matrix = process.cdist(
     queries, choices,
-    scorer=fuzz.JaroWinkler.similarity,
+    scorer=JaroWinkler.similarity,
     workers=-1,
-    score_cutoff=threshold_0_to_100,
+    score_cutoff=threshold_0_to_1,
 )
 # matrix is ndarray of shape (len(queries), len(choices))
 ```
