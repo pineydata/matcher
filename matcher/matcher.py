@@ -13,6 +13,8 @@ Key Concepts:
   - Multiple rules: ["email", ["first_name", "last_name"]] (match if ANY rule matches)
 - Rule Logic: Within a rule, all fields must match (AND logic). Across rules, any
   rule can match (OR logic).
+- Fuzzy Matching: match_fuzzy() uses Jaro-Winkler similarity (via rapidfuzz) for
+  typo-tolerant matching on a single string field, with a configurable threshold.
 
 Usage Pattern:
     >>> from matcher import Matcher
@@ -24,16 +26,14 @@ Usage Pattern:
     >>> matcher = Matcher(left=left_df, right=right_df, left_id="id", right_id="id")
     >>> results = matcher.match(rules="email")
     >>> print(f"Found {results.count} matches")
+    >>>
+    >>> # Fuzzy matching for names with typos
+    >>> fuzzy_results = matcher.match_fuzzy(field="name", threshold=0.85)
 
 Dependencies:
 - Uses MatchingAlgorithm components (from matcher.algorithms) to perform actual matching
 - Returns MatchResults objects (from matcher.results) for chaining operations
-
-Design Notes:
-- In-memory only: accepts Polars DataFrames, not file paths
-- Requires ID columns in both sources for proper matching and evaluation
-- Supports custom matching algorithms via dependency injection
-- Processes rules sequentially and combines results with OR logic
+- Fuzzy matching: rapidfuzz (cdist, JaroWinkler), PyArrow (Polars–NumPy bridge)
 """
 
 import polars as pl
@@ -278,3 +278,135 @@ class Matcher:
                 final_result = combined.unique()
 
         return final_result
+
+    def _empty_fuzzy_result(self) -> "MatchResults":
+        """Return MatchResults with zero rows and schema compatible with non-empty fuzzy results."""
+        from matcher.results import MatchResults
+        empty_pairs = pl.DataFrame(
+            {self.left_id: [], "_right_id_val": [], "confidence": []},
+            schema={
+                self.left_id: self.left.schema[self.left_id],
+                "_right_id_val": self.right.schema[self.right_id],
+                "confidence": pl.Float64,
+            },
+        )
+        right_id_right = f"{self.right_id}_right"
+        right_with_suffix = self.right.with_columns(
+            pl.col(self.right_id).alias(right_id_right)
+        )
+        result = (
+            empty_pairs.join(self.left, on=self.left_id, how="left")
+            .join(
+                right_with_suffix,
+                left_on="_right_id_val",
+                right_on=self.right_id,
+                how="left",
+                suffix="_right",
+            )
+            .drop("_right_id_val")
+        )
+        return MatchResults(result, original_left=self.left)
+
+    def match_fuzzy(
+        self,
+        field: str,
+        threshold: float = 0.85
+    ) -> "MatchResults":
+        """Fuzzy matching on a single string field using Jaro-Winkler similarity.
+
+        Uses batch vectorized similarity (rapidfuzz.process.cdist) with Polars → Arrow
+        → rapidfuzz data flow. Rows where the field is null are excluded from
+        matching (same as exact match: nulls do not match).
+
+        Args:
+            field: Single column name to match on (string values).
+            threshold: Minimum similarity in [0, 1] to count as a match (default 0.85).
+
+        Returns:
+            MatchResults with matches including a 'confidence' column (0–1).
+
+        Raises:
+            ValueError: If field is missing in left or right, or threshold not in [0, 1].
+
+        Example:
+            >>> results = matcher.match_fuzzy(field="name", threshold=0.85)
+            >>> print(f"Found {results.count} matches")
+            >>> results.matches.filter(pl.col("confidence") >= 0.9)
+        """
+        if not 0 <= threshold <= 1:
+            raise ValueError(f"threshold must be between 0 and 1, got {threshold}")
+        if field not in self.left.columns:
+            raise ValueError(
+                f"Field '{field}' not found in left source. Available: {self.left.columns}"
+            )
+        if field not in self.right.columns:
+            raise ValueError(
+                f"Field '{field}' not found in right source. Available: {self.right.columns}"
+            )
+
+        # Exclude nulls (same semantics as exact match)
+        left_valid = self.left.filter(pl.col(field).is_not_null())
+        right_valid = self.right.filter(pl.col(field).is_not_null())
+        if left_valid.height == 0 or right_valid.height == 0:
+            return self._empty_fuzzy_result()
+
+        # Normalize: lowercase and strip (columnar in Polars)
+        left_norm = left_valid.with_columns(
+            pl.col(field).str.to_lowercase().str.strip_chars().alias("_fuzzy_val")
+        )
+        right_norm = right_valid.with_columns(
+            pl.col(field).str.to_lowercase().str.strip_chars().alias("_fuzzy_val")
+        )
+
+        # Polars → Arrow → list of strings (bridge per PHASE3_FUZZY_IMPLEMENTATION)
+        left_arrow = left_norm.select("_fuzzy_val").to_arrow()
+        right_arrow = right_norm.select("_fuzzy_val").to_arrow()
+        left_strings = left_arrow.column("_fuzzy_val").to_pylist()
+        right_strings = right_arrow.column("_fuzzy_val").to_pylist()
+
+        # Batch similarity matrix via rapidfuzz (C-level, workers=-1)
+        from rapidfuzz import process
+        from rapidfuzz.distance import JaroWinkler
+        matrix = process.cdist(
+            left_strings,
+            right_strings,
+            scorer=JaroWinkler.similarity,
+            workers=-1,
+            score_cutoff=threshold,
+        )
+
+        # Pairs (i, j) where matrix[i, j] >= threshold
+        # Use _right_id_val in pairs to avoid duplicate column names when left_id == right_id
+        import numpy as np
+        rows, cols = np.where(matrix >= threshold)
+        if len(rows) == 0:
+            return self._empty_fuzzy_result()
+
+        left_id_list = left_valid.select(self.left_id).to_series().to_list()
+        right_id_list = right_valid.select(self.right_id).to_series().to_list()
+        pairs_data = {
+            self.left_id: [left_id_list[int(r)] for r in rows],
+            "_right_id_val": [right_id_list[int(c)] for c in cols],
+            "confidence": [float(matrix[rows[k], cols[k]]) for k in range(len(rows))],
+        }
+        pairs = pl.DataFrame(pairs_data)
+
+        # Rejoin with full left/right to get same shape as match() and add confidence
+        right_id_right = f"{self.right_id}_right"
+        right_with_suffix = self.right.with_columns(
+            pl.col(self.right_id).alias(right_id_right)
+        )
+        result = (
+            pairs.join(self.left, on=self.left_id, how="left")
+            .join(
+                right_with_suffix,
+                left_on="_right_id_val",
+                right_on=self.right_id,
+                how="left",
+                suffix="_right",
+            )
+            .drop("_right_id_val")
+        )
+
+        from matcher.results import MatchResults
+        return MatchResults(result, original_left=self.left)

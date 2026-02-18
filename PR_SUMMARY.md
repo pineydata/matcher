@@ -1,40 +1,48 @@
 ---
-title: PR Summary - Technical debt cleanup (max_workers removal, null handling docs)
-tags: [breaking, documentation]
+title: PR Summary - Phase 3 Fuzzy Matching
+tags: [enhancement, feature]
 ---
 
 ## Overview
 
-- **Removed unused `max_workers`** from ExactMatcher, Matcher, and Deduplicator so the API matches reality (Polars handles parallelization; the parameter was never used).
-- **Documented null handling** for exact matching: Polars inner joins exclude nulls (including null-to-null); docstring and README updated so behavior is explicit.
-- **ROADMAP** updated: technical debt items marked done and Next Steps checkboxes updated.
+- **Fuzzy matching API**: `Matcher.match_fuzzy(field=..., threshold=0.85)` and `Deduplicator.match_fuzzy(...)` for typo-tolerant matching on a single string column using Jaro–Winkler similarity.
+- **Vectorized pipeline**: Polars → Arrow → rapidfuzz `cdist` (no row-by-row Python loops); single batch similarity matrix, multi-core via `workers=-1`.
+- **Same result shape as exact match**: Full joined rows plus `confidence` (0–1); `evaluate()` and `refine()` work unchanged.
 
 ## Key Changes
 
-### Matching Algorithm
+### Dependencies
 
-- `matcher/algorithms.py`:
-  - ExactMatcher no longer accepts `max_workers`; class docstring notes Polars handles parallelization.
-  - ExactMatcher.match() docstring documents null handling: join keys with nulls (including null-to-null) are excluded; suggests filling/dropping nulls if different behavior is needed.
+- `pyproject.toml`: Added `rapidfuzz>=3.0.0`, `pyarrow>=14.0.0`, `numpy>=1.24.0` for fuzzy matching and the Polars–rapidfuzz bridge.
 
-### Matcher and Deduplicator
+### Matcher
 
 - `matcher/matcher.py`:
-  - Matcher no longer accepts `max_workers`; algorithm initialization simplified (no hasattr/pass-through).
+  - New `match_fuzzy(field, threshold=0.85)`: validates field and threshold; drops nulls on field; normalizes (lowercase, strip) in Polars; exports via Arrow to lists; runs `rapidfuzz.process.cdist` with `JaroWinkler.similarity`; builds (left_id, right_id, confidence) pairs and rejoins to full left/right. Returns `MatchResults` with `original_left` for refine/evaluate.
+  - **DRY**: Extracted `_empty_fuzzy_result()` so both "no valid rows" and "no pairs above threshold" use one helper instead of duplicating empty-pairs + join logic.
+  - Handles empty inputs and "no pairs above threshold" with explicit schema so joins don't fail. Uses temp column `_right_id_val` when left_id/right_id share the same name (e.g. both `"id"`).
+  - Module docstring updated with fuzzy usage and dependencies.
+
+### Deduplicator
+
 - `matcher/deduplicator.py`:
-  - Deduplicator no longer accepts or passes `max_workers` to Matcher.
+  - New `match_fuzzy(field, threshold=0.85)`: delegates to `_matcher.match_fuzzy()`, then filters self-matches (`id != id_right`) and returns `MatchResults` with same `original_left`. Docstring and module docs updated.
 
-### Documentation
+### Tests
 
-- `README.md`:
-  - New **Null handling** subsection after Quick Start describing exact-match null behavior and when to preprocess nulls.
-- `ROADMAP.md`:
-  - Technical debt items 1 (Remove max_workers) and 2 (Document null handling) marked ✅ Done; corresponding Next Steps checkboxes checked.
+- `tests/test_core.py`: Seven fuzzy tests—basic match, typos, missing field (left/right), threshold validation, high threshold fewer matches, empty when no matches, and Deduplicator fuzzy (including no self-matches).
+- `tests/test_with_sample_data.py`: Two sample-data tests—fuzzy entity resolution on `first_name` (≥20 matches, confidence in [0.85, 1]) and fuzzy deduplication (≥50 pairs, no self-matches).
 
 ## Testing
 
-- All existing tests passing: `pytest` (47 tests). No test code changes; removal of `max_workers` is backward-incompatible for callers who passed it (they will get `TypeError: unexpected keyword argument 'max_workers'`).
+- All tests passing: `pytest` (55 tests). Fuzzy coverage: unit tests for API, validation, and edge cases; integration tests against generated entity-resolution and deduplication sample data.
+
+## Principles
+
+- **KISS/YAGNI**: Single algorithm (Jaro–Winkler), single threshold, one field; no new algorithm class.
+- **Convention over configuration**: Sensible default threshold 0.85; same `MatchResults` contract as `match()`.
+- **Backward compatibility**: No changes to existing `match()` or `MatchResults`/evaluator contracts.
 
 ---
 
-**Note:** Add GitHub labels to the PR (e.g. `breaking`, `documentation`) so release notes can categorize this correctly.
+**Reminder:** Add GitHub labels to the PR (e.g. `enhancement`, `feature`) so release notes can categorize this change.

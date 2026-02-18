@@ -20,12 +20,15 @@ Usage Pattern:
     >>> deduplicator = Deduplicator(source=df, id_col="id")
     >>> results = deduplicator.match(rules="email")
     >>> print(f"Found {results.count} duplicate pairs")
+    >>> # Fuzzy deduplication (e.g. names with typos)
+    >>> fuzzy_results = deduplicator.match_fuzzy(field="name", threshold=0.85)
 
 Differences from Matcher:
 - Takes a single source DataFrame instead of left/right
 - Uses id_col for both left_id and right_id
 - Automatically filters self-matches (where id == id_right)
 - Same rule syntax and matching logic as Matcher
+- match_fuzzy() delegates to Matcher.match_fuzzy() and filters self-matches
 
 Dependencies:
 - Uses Matcher (from matcher.matcher) internally for matching logic
@@ -119,4 +122,31 @@ class Deduplicator:
             pl.col(self._id_col) != pl.col(id_col_right)
         )
 
+        return MatchResults(filtered_matches, original_left=self._matcher.left)
+
+    def match_fuzzy(
+        self,
+        field: str,
+        threshold: float = 0.85
+    ) -> MatchResults:
+        """Fuzzy deduplication on a single string field using Jaro-Winkler similarity.
+
+        Delegates to Matcher.match_fuzzy() then filters out self-matches
+        (where id_col == id_col_right).
+
+        Args:
+            field: Single column name to match on (string values).
+            threshold: Minimum similarity in [0, 1] to count as a match (default 0.85).
+
+        Returns:
+            MatchResults with duplicate pairs and 'confidence' column (self-matches excluded).
+
+        Example:
+            >>> results = deduplicator.match_fuzzy(field="name", threshold=0.85)
+        """
+        results = self._matcher.match_fuzzy(field=field, threshold=threshold)
+        id_col_right = f"{self._id_col}_right"
+        filtered_matches = results.matches.filter(
+            pl.col(self._id_col) != pl.col(id_col_right)
+        )
         return MatchResults(filtered_matches, original_left=self._matcher.left)

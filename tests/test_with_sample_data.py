@@ -101,3 +101,39 @@ def test_entity_resolution_ground_truth_validation(sample_data_dir):
     # Some extra matches are expected (e.g., multi-field matches also match on email alone)
     assert len(missing) == 0, f"Missing matches: {missing}"
     assert results.count >= 40, f"Should find at least 40 matches, got {results.count}"
+
+
+def test_match_fuzzy_entity_resolution_with_sample_data(sample_data_dir):
+    """Test fuzzy matching (Matcher) with generated entity resolution sample data."""
+    left_path = sample_data_dir / "ExactMatcher" / "entity_resolution" / "customers_a.parquet"
+    right_path = sample_data_dir / "ExactMatcher" / "entity_resolution" / "customers_b.parquet"
+
+    left_df = pl.read_parquet(left_path)
+    right_df = pl.read_parquet(right_path)
+    matcher = Matcher(left=left_df, right=right_df, left_id="id", right_id="id")
+
+    # Fuzzy on first_name: known pairs share same first_name (name-only 10 + mixed 10 = 20)
+    # Exact same string gives confidence 1.0; we may get more from similar names
+    results = matcher.match_fuzzy(field="first_name", threshold=0.85)
+    assert results.count >= 20, f"Expected at least 20 fuzzy matches on first_name, got {results.count}"
+    assert "confidence" in results.matches.columns
+    assert "id_right" in results.matches.columns
+    assert results.matches["confidence"].min() >= 0.85
+    assert results.matches["confidence"].max() <= 1.0
+
+
+def test_match_fuzzy_deduplication_with_sample_data(sample_data_dir):
+    """Test fuzzy matching (Deduplicator) with generated deduplication sample data."""
+    source_path = sample_data_dir / "ExactMatcher" / "deduplication" / "customers.parquet"
+
+    df = pl.read_parquet(source_path)
+    deduplicator = Deduplicator(source=df, id_col="id")
+    results = deduplicator.match_fuzzy(field="first_name", threshold=0.85)
+
+    # 50 duplicate pairs share same first_name (Duplicate0, Duplicate1, ...); no self-matches
+    assert results.count >= 50, f"Expected at least 50 fuzzy duplicate pairs, got {results.count}"
+    assert "confidence" in results.matches.columns
+    assert "id_right" in results.matches.columns
+    # No self-matches
+    self_matches = results.matches.filter(pl.col("id") == pl.col("id_right"))
+    assert len(self_matches) == 0, "Deduplicator should filter out self-matches"
