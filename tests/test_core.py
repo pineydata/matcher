@@ -219,3 +219,126 @@ def test_match_rules_string_single_field():
 
     # Should find matches from both rules
     assert results.count >= 1
+
+
+# --- match_fuzzy (Phase 3) ---
+
+
+def test_match_fuzzy_basic():
+    """Fuzzy matching finds similar strings above threshold."""
+    left = pl.DataFrame({
+        "id": [1, 2],
+        "name": ["John Smith", "Jane Doe"],
+    })
+    right = pl.DataFrame({
+        "id": [10, 20],
+        "name": ["John Smith", "J. Smith"],  # typo/variant
+    })
+    matcher = Matcher(left=left, right=right, left_id="id", right_id="id")
+    results = matcher.match_fuzzy(field="name", threshold=0.85)
+    assert results.count >= 1
+    assert "confidence" in results.matches.columns
+    assert "id" in results.matches.columns
+    assert "id_right" in results.matches.columns
+    # Exact match should be present
+    exact = results.matches.filter(pl.col("name") == pl.col("name_right"))
+    assert len(exact) >= 1
+    # Confidence in [0, 1]
+    assert results.matches["confidence"].min() >= 0.85
+    assert results.matches["confidence"].max() <= 1.0
+
+
+def test_match_fuzzy_typos():
+    """Fuzzy matching matches names with typos (Jaro-Winkler)."""
+    left = pl.DataFrame({"id": [1], "name": ["Alice Johnson"]})
+    right = pl.DataFrame({"id": [2], "name": ["Alicia Johnson"]})  # typo
+    matcher = Matcher(left=left, right=right, left_id="id", right_id="id")
+    results = matcher.match_fuzzy(field="name", threshold=0.80)
+    assert results.count >= 1
+    assert results.matches["confidence"][0] >= 0.80
+
+
+def test_match_fuzzy_missing_field_left():
+    """match_fuzzy raises when field is missing in left source."""
+    left = pl.DataFrame({"id": [1], "email": ["a@test.com"]})
+    right = pl.DataFrame({"id": [2], "email": ["b@test.com"], "name": ["Bob"]})
+    matcher = Matcher(left=left, right=right, left_id="id", right_id="id")
+    with pytest.raises(ValueError, match="not found in left source"):
+        matcher.match_fuzzy(field="name", threshold=0.85)
+
+
+def test_match_fuzzy_missing_field_right():
+    """match_fuzzy raises when field is missing in right source."""
+    left = pl.DataFrame({"id": [1], "email": ["a@test.com"], "name": ["Alice"]})
+    right = pl.DataFrame({"id": [2], "email": ["b@test.com"]})
+    matcher = Matcher(left=left, right=right, left_id="id", right_id="id")
+    with pytest.raises(ValueError, match="not found in right source"):
+        matcher.match_fuzzy(field="name", threshold=0.85)
+
+
+def test_match_fuzzy_non_string_field_raises():
+    """match_fuzzy raises when field is not a string (Utf8) column."""
+    left = pl.DataFrame({"id": [1], "name": ["Alice"], "age": [30]})
+    right = pl.DataFrame({"id": [2], "name": ["Bob"], "age": [25]})
+    matcher = Matcher(left=left, right=right, left_id="id", right_id="id")
+    with pytest.raises(ValueError, match="must be a string \\(Utf8\\) column"):
+        matcher.match_fuzzy(field="age", threshold=0.85)
+
+
+def test_match_fuzzy_threshold_validation():
+    """match_fuzzy raises when threshold not in [0, 1]."""
+    left = pl.DataFrame({"id": [1], "name": ["a"]})
+    right = pl.DataFrame({"id": [2], "name": ["b"]})
+    matcher = Matcher(left=left, right=right, left_id="id", right_id="id")
+    with pytest.raises(ValueError, match="threshold must be between 0 and 1"):
+        matcher.match_fuzzy(field="name", threshold=1.5)
+    with pytest.raises(ValueError, match="threshold must be between 0 and 1"):
+        matcher.match_fuzzy(field="name", threshold=-0.1)
+
+
+def test_match_fuzzy_high_threshold_fewer_matches():
+    """Higher threshold yields fewer matches."""
+    left = pl.DataFrame({"id": [1], "name": ["Alice"]})
+    right = pl.DataFrame({"id": [2], "name": ["Alicia"]})
+    matcher = Matcher(left=left, right=right, left_id="id", right_id="id")
+    low = matcher.match_fuzzy(field="name", threshold=0.5)
+    high = matcher.match_fuzzy(field="name", threshold=0.99)
+    assert low.count >= high.count
+
+
+def test_match_fuzzy_nulls_excluded():
+    """match_fuzzy excludes rows where the field is null (same as exact match)."""
+    left = pl.DataFrame({"id": [1, 2], "name": ["Alice", None]})
+    right = pl.DataFrame({"id": [3, 4], "name": ["Alicia", "Bob"]})
+    matcher = Matcher(left=left, right=right, left_id="id", right_id="id")
+    results = matcher.match_fuzzy(field="name", threshold=0.5)
+    # Row with null on left should not produce matches; only (1,3) can match
+    left_ids_in_results = results.matches["id"].to_list()
+    assert 2 not in left_ids_in_results, "Left row with null name should be excluded from matching"
+
+
+def test_match_fuzzy_empty_when_no_matches():
+    """match_fuzzy returns empty MatchResults when no pairs above threshold."""
+    left = pl.DataFrame({"id": [1], "name": ["xyzabc"]})
+    right = pl.DataFrame({"id": [2], "name": ["qqq"]})
+    matcher = Matcher(left=left, right=right, left_id="id", right_id="id")
+    results = matcher.match_fuzzy(field="name", threshold=0.99)
+    assert results.count == 0
+    assert "confidence" in results.matches.columns
+
+
+def test_deduplicator_match_fuzzy():
+    """Deduplicator.match_fuzzy finds fuzzy duplicates and filters self-matches."""
+    df = pl.DataFrame({
+        "id": [1, 2, 3],
+        "name": ["Alice Smith", "Alicia Smith", "Bob Jones"],  # 1 and 2 are fuzzy dupes
+    })
+    deduplicator = Deduplicator(source=df, id_col="id")
+    results = deduplicator.match_fuzzy(field="name", threshold=0.80)
+    assert results.count >= 1
+    assert "confidence" in results.matches.columns
+    # No self-matches (id must not equal id_right)
+    id_right = "id_right"
+    assert id_right in results.matches.columns
+    self_matches = results.matches.filter(pl.col("id") == pl.col(id_right))
+    assert len(self_matches) == 0
