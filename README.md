@@ -1,7 +1,5 @@
 # matcher
 
-![hygge logo](hygge.svg)
-
 A cozy, comfortable matching library that makes entity resolution and deduplication feel natural.
 
 ## Philosophy
@@ -50,6 +48,8 @@ pip install matcher
 
 ## Quick Start
 
+The examples below use paths from the project's generated test data. Create them with `uv run python scripts/generate_test_data.py`, or use your own Parquet/CSV paths.
+
 ```python
 import polars as pl
 from matcher import Matcher, Deduplicator
@@ -76,6 +76,10 @@ results = matcher.match(rules=[
     "email",
     ["first_name", "last_name"]
 ])
+
+# Fuzzy matching (typo-tolerant, single field) and optional blocking
+# results = matcher.match_fuzzy(field="name", threshold=0.85)
+# results = matcher.match(rules="email", blocking_key="zip_code")
 ```
 
 ### Null handling
@@ -100,37 +104,32 @@ The component-based architecture (similar to scikit-learn) enables you to:
 ### Example: Comparing Matching Approaches
 
 ```python
-from matcher import Matcher, ExactMatcher, SimpleEvaluator
+from matcher import Matcher
 import polars as pl
 
-# Load data
+# Load data (generate first: uv run python scripts/generate_test_data.py)
 left_df = pl.read_parquet("data/ExactMatcher/entity_resolution/customers_a.parquet")
 right_df = pl.read_parquet("data/ExactMatcher/entity_resolution/customers_b.parquet")
-ground_truth = pl.read_parquet("data/ground_truth.parquet")
+# Ground truth: known pairs as DataFrame with left_id, right_id
+ground_truth = pl.DataFrame({
+    "left_id": ["left_1", "left_2", "left_3"],
+    "right_id": ["right_1", "right_2", "right_3"]
+})  # or pl.read_parquet("your_ground_truth.parquet")
 
-# Test exact matching
-matcher_exact = Matcher(
-    left=left_df,
-    right=right_df,
-    matching_algorithm=ExactMatcher()
-)
-results_exact = matcher_exact.match(rules="email")
-metrics_exact = results_exact.evaluate(ground_truth)
+matcher = Matcher(left=left_df, right=right_df, left_id="id", right_id="id")
 
-# Test case-insensitive matching (custom algorithm)
-from examples.component_usage import CaseInsensitiveExactMatcher
-matcher_case_insensitive = Matcher(
-    left=left_df,
-    right=right_df,
-    matching_algorithm=CaseInsensitiveExactMatcher()
-)
-results_ci = matcher_case_insensitive.match(rules="email")
-metrics_ci = results_ci.evaluate(ground_truth)
+# Test email-only matching
+results_email = matcher.match(rules="email")
+metrics_email = results_email.evaluate(ground_truth)
+
+# Test name-only matching
+results_name = matcher.match(rules=["first_name", "last_name"])
+metrics_name = results_name.evaluate(ground_truth)
 
 # Compare results
-print(f"Exact matching: Precision={metrics_exact['precision']:.2%}, Recall={metrics_exact['recall']:.2%}")
-print(f"Case-insensitive: Precision={metrics_ci['precision']:.2%}, Recall={metrics_ci['recall']:.2%}")
-# Choose the approach that performs better for your data
+print(f"Email rule: Precision={metrics_email['precision']:.2%}, Recall={metrics_email['recall']:.2%}")
+print(f"Name rule: Precision={metrics_name['precision']:.2%}, Recall={metrics_name['recall']:.2%}")
+# You can also swap matching_algorithm (e.g. custom case-insensitive matcher) and compare
 ```
 
 ## Component-Based Architecture
@@ -162,7 +161,16 @@ matcher = Matcher(
 results = matcher.match(rules="email")
 ```
 
-See `examples/component_usage.py` for more examples.
+### Cascading matching (refine)
+
+Apply a second rule only to left-side records that did not match the first. Useful for “match on email first, then on name for the rest”:
+
+```python
+results = matcher.match(rules="email")
+refined = results.refine(matcher, rule=["first_name", "last_name"])  # adds name matches for unmatched
+```
+
+See the test suite (`tests/`) for more examples of custom algorithms and usage.
 
 ## Evaluation & Measurement
 
@@ -225,6 +233,18 @@ Use evaluation to:
 - **Validate improvements**: Measure impact before committing to a new approach
 - **Track quality**: Iterate until precision/recall are good enough for your use case
 
+### Tuning fuzzy threshold
+
+For fuzzy matching, use `find_best_threshold()` to pick a confidence threshold from match results and ground truth (it sweeps thresholds and returns the one that maximizes F1). Requires a `confidence` column, so use `match_fuzzy()` results:
+
+```python
+from matcher import Matcher, find_best_threshold
+
+results = matcher.match_fuzzy(field="name", threshold=0.85)
+best = find_best_threshold(results.matches, ground_truth, right_id_col="id_right")
+print(f"Best threshold: {best['best_threshold']}, F1: {best['best_f1']:.2%}")
+```
+
 ### Export for review
 
 Export match results to **CSV** for human review (opens in Excel, Power BI, or any tool). The file includes identifiers and joined columns so reviewers have enough context without opening other systems. Use `sample(n=...)` to export a manageable sample for reviewers.
@@ -277,7 +297,7 @@ Regenerate test data with: `uv run python scripts/generate_test_data.py`
 
 ## Documentation
 
-See `MATCHING_PLAN_V2.md` for the implementation plan and `CLAUDE.md` for development guidelines.
+See `docs/archive/MATCHING_PLAN_V2.md` for the implementation plan and `CLAUDE.md` for development guidelines.
 
 ## Design Principles
 
