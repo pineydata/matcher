@@ -98,12 +98,16 @@ class SimpleEvaluator(Evaluator):
             )
 
         # Create normalized predicted matches DataFrame
-        # Resolve right ID column: use right_id_col if present, else try known conventions (documented above)
+        # Resolve right ID column: when left and right id share the same name (e.g. both "id"),
+        # prefer the suffixed column (e.g. "id_right") so we don't use left ids for both sides.
         pred_left_col = left_id_col
         pred_right_col = right_id_col
+        suffixed = f"{left_id_col}_right"
 
-        if pred_right_col not in predicted.columns:
-            alternatives = ["id_right", "id_match", f"{left_id_col}_right"]
+        if pred_right_col == left_id_col and suffixed in predicted.columns:
+            pred_right_col = suffixed
+        elif pred_right_col not in predicted.columns:
+            alternatives = ["id_right", "id_match", suffixed]
             for alt in alternatives:
                 if alt in predicted.columns:
                     pred_right_col = alt
@@ -214,6 +218,26 @@ def find_best_threshold(
         evaluator = SimpleEvaluator()
     if thresholds is None:
         thresholds = [round(0.5 + i * 0.05, 2) for i in range(11)]  # 0.50 .. 1.00
+    else:
+        if not isinstance(thresholds, (list, tuple)):
+            raise TypeError(
+                "thresholds must be a non-empty list or tuple of numeric values in [0.0, 1.0]."
+            )
+        if len(thresholds) == 0:
+            raise ValueError("thresholds must be a non-empty list or tuple.")
+        validated = []
+        for t in thresholds:
+            if not isinstance(t, (int, float)):
+                raise TypeError(
+                    "All threshold values must be numeric (int or float) in [0.0, 1.0]."
+                )
+            t_float = float(t)
+            if not 0.0 <= t_float <= 1.0:
+                raise ValueError(
+                    f"Threshold value {t} is out of range; expected values in [0.0, 1.0]."
+                )
+            validated.append(t_float)
+        thresholds = validated
 
     curve = []
     best_f1 = -1.0

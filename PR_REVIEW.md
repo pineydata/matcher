@@ -1,16 +1,16 @@
 # Code Review: Phase 4 – Human in the Loop & User Evaluation Workflow
 
-**PR Summary:** Export matches for human review (CSV + optional sample), evaluate() accepts CSV path as ground truth, README improvement loop and comparison examples, sample-data tests use evaluate() with known pairs.
+**PR Summary:** Export matches for human review (CSV + optional sample), evaluate() scores matches against a ground-truth DataFrame, README improvement loop and comparison examples, sample-data tests use evaluate() with known pairs.
 
 ---
 
 ## Strengths
 
-- **Clear scope**: Phase 4 delivers exactly what it describes: CSV export, `sample()`, path-based `evaluate()`, docs, and tests. No scope creep.
+- **Clear scope**: Phase 4 delivers exactly what it describes: CSV export, `sample()`, DataFrame-based `evaluate()`, docs, and tests. No scope creep.
 - **Comfortable API**: `results.sample(n=50, seed=42).export_for_review("sample.csv")` is readable and chainable. Matches the “flow” and “convention over configuration” goals.
 - **Fail-fast on invalid input**: `sample()` requires exactly one of `n` or `fraction` and raises `ValueError` for both/neither. No silent fallbacks.
-- **Backward compatible**: `evaluate(ground_truth)` still accepts a DataFrame; path support is additive. Existing callers are unchanged.
-- **Docs**: README improvement loop (six steps), CSV/Parquet in evaluate, export-for-review with `sample()`, and threshold-comparison example are clear and actionable.
+- **Backward compatible**: `evaluate(ground_truth)` accepts a ground-truth DataFrame, and existing callers that pass DataFrames are unchanged.
+- **Docs**: README improvement loop (six steps), export-for-review with `sample()`, and threshold-comparison example are clear and actionable.
 - **Tests**: `test_export_for_review` checks CSV round-trip; `test_sample_*` cover n, fraction, validation, and empty; sample-data tests use `evaluate()` with known pairs and assert precision/recall. Evaluation is the standard way to judge quality in tests.
 - **Code quality**: Polars-only, type hints, f-strings; module docstring in `results.py` updated with `sample()` and `export_for_review()`.
 

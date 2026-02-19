@@ -130,6 +130,10 @@ class MatchResults:
             raise ValueError("Provide either n or fraction, not both.")
         if n is None and fraction is None:
             raise ValueError("Provide either n (number of rows) or fraction (0–1).")
+        if n is not None and n < 0:
+            raise ValueError("n must be non-negative.")
+        if fraction is not None and not (0 < fraction <= 1):
+            raise ValueError("fraction must be in the range (0, 1].")
         if self.matches.height == 0:
             return MatchResults(self.matches, self._original_left)
         if n is not None:

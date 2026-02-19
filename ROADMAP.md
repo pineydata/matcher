@@ -227,7 +227,7 @@ results.sample(n=50, seed=42).export_for_review("sample_for_review.csv")
 - [x] Users can load exported file into Excel or any tool
 - [x] Improvement loop documented (get GT → match → evaluate → tune → re-run → compare)
 - [x] Sample-data tests use evaluate() with known pairs
-- [x] evaluate() accepts CSV path for ground_truth
+- [x] Users can load ground truth from CSV/Parquet and pass the DataFrame to evaluate()
 
 **Deferred (consider later):** Load-back of reviewed data, approval/rejection tracking, analyze_review(). Sets up path: reviewed sample → ground truth → evaluate.
 
@@ -319,7 +319,7 @@ Simplify when:
 - ✅ Exported file includes identifiers and match context; Excel or any tool
 - Improvement loop documented (get GT → match → evaluate → tune → re-run → compare)
 - Sample-data tests use evaluate() with known pairs
-- (Optional) evaluate() accepts CSV path for ground_truth
+- Users can load ground truth from CSV/Parquet and pass the DataFrame to evaluate()
 
 ---
 
@@ -327,7 +327,7 @@ Simplify when:
 
 ### Immediate (Next 1-2 weeks)
 - ~~Technical debt~~ ✅ Done. ~~Phase 4 export + sample~~ ✅ Done.
-- **Phase 4 completion**: Document improvement loop, use evaluate() in sample-data tests, optional CSV path for ground_truth
+- **Phase 4 completion**: Document improvement loop, use evaluate() in sample-data tests; user loads CSV/Parquet and passes DataFrame to evaluate()
 - **Effort:** 0.5–1 day
 
 ### Short-term (Next 1-3 months)
@@ -370,7 +370,7 @@ Simplify when:
    - [x] Remove `max_workers` parameter
    - [x] Document null handling behavior
    - [x] Phase 4 export + sample (CSV, sample())
-   - [x] **Phase 4 completion**: Document user evaluation workflow; use evaluate() in sample-data tests; CSV path for ground_truth
+   - [x] **Phase 4 completion**: Document user evaluation workflow; use evaluate() in sample-data tests; document ground_truth input format
    - [ ] Review roadmap with stakeholders
 
 2. **Short-term (Next 1-3 months)**

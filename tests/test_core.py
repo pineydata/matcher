@@ -104,6 +104,22 @@ def test_sample_requires_n_or_fraction():
         results.sample(n=2, fraction=0.5)
 
 
+def test_sample_n_negative_raises():
+    """Test sample(n=...) raises when n is negative."""
+    results = MatchResults(pl.DataFrame({"id": [1, 2, 3]}))
+    with pytest.raises(ValueError, match="n must be non-negative"):
+        results.sample(n=-1)
+
+
+def test_sample_fraction_out_of_range_raises():
+    """Test sample(fraction=...) raises when fraction is not in (0, 1]."""
+    results = MatchResults(pl.DataFrame({"id": [1, 2, 3]}))
+    with pytest.raises(ValueError, match="fraction must be"):
+        results.sample(fraction=0)
+    with pytest.raises(ValueError, match="fraction must be"):
+        results.sample(fraction=1.5)
+
+
 def test_sample_empty_matches():
     """Test sample on empty matches returns empty MatchResults."""
     results = MatchResults(pl.DataFrame({"id": [], "x": []}))

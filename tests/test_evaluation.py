@@ -216,3 +216,19 @@ def test_find_best_threshold_requires_confidence():
     ground_truth = pl.DataFrame({"left_id": [1], "right_id": [2]})
     with pytest.raises(ValueError, match="confidence"):
         find_best_threshold(matches, ground_truth)
+
+
+def test_find_best_threshold_empty_thresholds_raises():
+    """Test find_best_threshold raises if thresholds is empty."""
+    matches = pl.DataFrame({"id": [1], "id_right": [2], "confidence": [0.9]})
+    ground_truth = pl.DataFrame({"left_id": [1], "right_id": [2]})
+    with pytest.raises(ValueError, match="non-empty"):
+        find_best_threshold(matches, ground_truth, thresholds=[])
+
+
+def test_find_best_threshold_invalid_threshold_value_raises():
+    """Test find_best_threshold raises if a threshold is out of [0, 1]."""
+    matches = pl.DataFrame({"id": [1], "id_right": [2], "confidence": [0.9]})
+    ground_truth = pl.DataFrame({"left_id": [1], "right_id": [2]})
+    with pytest.raises(ValueError, match="out of range"):
+        find_best_threshold(matches, ground_truth, thresholds=[0.5, 1.5])
