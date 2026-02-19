@@ -166,7 +166,7 @@ See `examples/component_usage.py` for more examples.
 
 ## Evaluation & Measurement
 
-hygge-match includes built-in evaluation capabilities to measure matching performance:
+hygge-match includes built-in evaluation so you can **measure matching performance and improve over time**. Ground truth should be provided as a Polars `DataFrame` with `left_id` and `right_id` columns listing known true pairs. If your labels are stored on disk (e.g. Parquet or CSV), load them first with `pl.read_parquet` or `pl.read_csv` before calling `evaluate()`.
 
 ```python
 from matcher import Matcher
@@ -175,12 +175,12 @@ import polars as pl
 # Load data
 left_df = pl.read_parquet("data/ExactMatcher/entity_resolution/customers_a.parquet")
 right_df = pl.read_parquet("data/ExactMatcher/entity_resolution/customers_b.parquet")
+matcher = Matcher(left=left_df, right=right_df, left_id="id", right_id="id")
 
 # Run matching
-matcher = Matcher(left=left_df, right=right_df)
 results = matcher.match(rules="email")
 
-# Evaluate against ground truth
+# Evaluate against ground truth (DataFrame with left_id, right_id columns)
 ground_truth = pl.DataFrame({
     "left_id": ["left_1", "left_2"],
     "right_id": ["right_1", "right_2"]
@@ -192,11 +192,53 @@ print(f"Recall: {metrics['recall']:.2%}")
 print(f"F1 Score: {metrics['f1']:.2%}")
 ```
 
+### Improvement loop (use evaluation to get better)
+
+Use evaluate so **you** can improve: get ground truth, run match, evaluate, change something, re-run, compare metrics until the result is good enough.
+
+1. **Get ground truth** — Known pairs (e.g. from a human-reviewed sample or existing labels) as a DataFrame with `left_id` and `right_id`. Load from CSV or Parquet if needed: `ground_truth = pl.read_csv("reviewed.csv")`.
+2. **Run your matcher** — e.g. `results = matcher.match(rules="email")` or `matcher.match_fuzzy(field="name", threshold=0.85)`.
+3. **Evaluate** — `metrics = results.evaluate(ground_truth)`. For deduplication, or when the left and right id columns share the same name (e.g. both `id`), pass `right_id_col="id_right"` so the evaluator can correctly resolve right-side ids.
+4. **Change something** — Adjust rules, threshold, or (later) blocking.
+5. **Re-run and compare** — Run again, call `evaluate(ground_truth)`, compare precision/recall/F1 to the previous run.
+6. **Repeat** until quality is good enough.
+
+Example: compare two thresholds by running each and comparing metrics:
+
+```python
+# Try threshold 0.85
+results_85 = matcher.match_fuzzy(field="name", threshold=0.85)
+m85 = results_85.evaluate(ground_truth)
+
+# Try threshold 0.82 (more recall, maybe more false positives)
+results_82 = matcher.match_fuzzy(field="name", threshold=0.82)
+m82 = results_82.evaluate(ground_truth)
+
+# Choose based on evidence
+print(f"0.85: precision={m85['precision']:.2%}, recall={m85['recall']:.2%}")
+print(f"0.82: precision={m82['precision']:.2%}, recall={m82['recall']:.2%}")
+```
+
 Use evaluation to:
 
-- **Compare approaches**: Test different algorithms and choose the best performer
+- **Compare approaches**: Test different algorithms or thresholds and choose the best performer
 - **Validate improvements**: Measure impact before committing to a new approach
-- **Track quality**: Monitor matching quality as you iterate
+- **Track quality**: Iterate until precision/recall are good enough for your use case
+
+### Export for review
+
+Export match results to **CSV** for human review (opens in Excel, Power BI, or any tool). The file includes identifiers and joined columns so reviewers have enough context without opening other systems. Use `sample(n=...)` to export a manageable sample for reviewers.
+
+```python
+results = matcher.match_fuzzy(field="name", threshold=0.85)
+results.export_for_review("matches_for_review.csv")
+
+# Export a sample for reviewers
+results.sample(n=50, seed=42).export_for_review("sample_for_review.csv")
+
+# Focused export: only selected columns
+results.pipe(lambda df: df.select(["id", "id_right", "confidence", "name", "name_right"])).export_for_review("review.csv")
+```
 
 ## Development
 

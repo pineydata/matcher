@@ -50,6 +50,83 @@ def test_match_results_count():
     assert results.count == 3
 
 
+def test_export_for_review(tmp_path):
+    """Test export_for_review writes CSV and preserves matches."""
+    matches = pl.DataFrame({
+        "id": [1, 2],
+        "id_right": [3, 4],
+        "confidence": [0.95, 0.88],
+        "name": ["Alice", "Bob"],
+        "name_right": ["A. Smith", "B. Jones"],
+    })
+    results = MatchResults(matches)
+    path = tmp_path / "matches_for_review.csv"
+
+    results.export_for_review(path)
+
+    assert path.exists()
+    back = pl.read_csv(path)
+    assert back.shape == matches.shape
+    assert back.columns == matches.columns
+    # CSV round-trip may change dtypes; check key values
+    assert back["id"].to_list() == [1, 2]
+    assert back["name"].to_list() == ["Alice", "Bob"]
+
+
+def test_sample_n():
+    """Test sample(n) returns MatchResults with n rows (or all if n >= count)."""
+    matches = pl.DataFrame({"id": [1, 2, 3, 4, 5], "x": [10, 20, 30, 40, 50]})
+    results = MatchResults(matches)
+
+    sampled = results.sample(n=3, seed=42)
+    assert sampled.count == 3
+    assert sampled.matches.height == 3
+
+    all_rows = results.sample(n=10, seed=0)
+    assert all_rows.count == 5
+
+
+def test_sample_fraction():
+    """Test sample(fraction) returns MatchResults with proportion of rows."""
+    matches = pl.DataFrame({"id": list(range(100)), "x": list(range(100))})
+    results = MatchResults(matches)
+
+    sampled = results.sample(fraction=0.2, seed=123)
+    assert sampled.count == 20
+
+
+def test_sample_requires_n_or_fraction():
+    """Test sample() raises if neither n nor fraction given."""
+    results = MatchResults(pl.DataFrame({"id": [1, 2, 3]}))
+    with pytest.raises(ValueError, match="Provide either n"):
+        results.sample()
+    with pytest.raises(ValueError, match="not both"):
+        results.sample(n=2, fraction=0.5)
+
+
+def test_sample_n_negative_raises():
+    """Test sample(n=...) raises when n is negative."""
+    results = MatchResults(pl.DataFrame({"id": [1, 2, 3]}))
+    with pytest.raises(ValueError, match="n must be non-negative"):
+        results.sample(n=-1)
+
+
+def test_sample_fraction_out_of_range_raises():
+    """Test sample(fraction=...) raises when fraction is not in (0, 1]."""
+    results = MatchResults(pl.DataFrame({"id": [1, 2, 3]}))
+    with pytest.raises(ValueError, match="fraction must be"):
+        results.sample(fraction=0)
+    with pytest.raises(ValueError, match="fraction must be"):
+        results.sample(fraction=1.5)
+
+
+def test_sample_empty_matches():
+    """Test sample on empty matches returns empty MatchResults."""
+    results = MatchResults(pl.DataFrame({"id": [], "x": []}))
+    sampled = results.sample(n=5, seed=0)
+    assert sampled.count == 0
+
+
 def test_match_multi_field_entity_resolution():
     """Test exact matching with multiple fields for entity resolution."""
     left = pl.DataFrame({

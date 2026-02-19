@@ -1,18 +1,18 @@
 # hygge-match Roadmap
 
-**Last Updated:** 2025
-**Current Phase:** Phase 1 Complete ✅
-**Next Phase:** TBD (Phase 2 Blocking or Phase 3 Fuzzy Matching)
+**Last Updated:** 2026
+**Current Phase:** Phase 1, Phase 3 & Phase 4 Complete ✅
+**Next Phase:** Phase 2 Blocking or Phase 4 load-back as needed
 
 ---
 
 ## Executive Summary
 
-**Current State:** Phase 1 (Exact Matching) is complete and production-ready. The codebase is clean, well-tested, and ready for continued development.
+**Current State:** Phase 1 (Exact Matching) and Phase 3 (Fuzzy Matching) are complete and production-ready. The codebase is clean, well-tested, and ready for continued development.
 
 **Strategic Direction:**
-- **Immediate (Next 1-2 weeks)**: Address technical debt, improve documentation
-- **Short-term (Next 1-3 months)**: Phase 2 (Blocking) or Phase 3 (Fuzzy Matching) based on user needs
+- **Immediate (Next)**: Complete Phase 4—document user evaluation workflow (get GT → match → evaluate → tune → re-run), use evaluate() in sample-data tests
+- **Short-term (Next 1-3 months)**: Phase 2 (Blocking) or Phase 4 load-back based on user needs
 - **Medium-term (3-6 months)**: Complete remaining phases, add advanced features as needed
 - **Long-term (6+ months)**: Human-in-the-loop workflows, Power BI integration
 
@@ -46,8 +46,8 @@
 - ✅ Auditable results
 
 **What's Next:**
-- Address technical debt (see below)
-- Plan for Phase 2 or Phase 3 based on user needs
+- Technical debt (max_workers, null handling docs) addressed ✅
+- Review roadmap with stakeholders; plan for Phase 2 or Phase 3 based on user needs
 
 ---
 
@@ -158,26 +158,21 @@ results = matcher.match(
 
 ---
 
-## Phase 3: Fuzzy Matching
+## Phase 3: Fuzzy Matching ✅ COMPLETE
 
-**Status:** Not Started
+**Status:** Complete and production-ready
 
 **Goal:** Handle typos and variations ("John Smith" vs "J. Smith").
 
-**When to Build:**
-- ✅ Phase 1 works
-- ✅ Real data has typos/variations that exact matching misses
-- ✅ Need fuzzy matching to find important matches
-- ✅ Can measure improvement (before/after metrics)
+**What Was Built:**
+- ✅ `Matcher.match_fuzzy(field=..., threshold=0.85)` and `Deduplicator.match_fuzzy()`
+- ✅ Single algorithm (Jaro-Winkler via rapidfuzz), single threshold
+- ✅ Vectorized pipeline: Polars → Arrow → rapidfuzz `cdist` (no row loops); multi-core
+- ✅ `rapidfuzz`, `pyarrow`, `numpy` dependencies; simple normalization (lowercase, trim)
+- ✅ String (Utf8) validation; nulls excluded (same semantics as exact match)
+- ✅ MatchResults with `confidence` column; works with `evaluate()` and `refine()`
 
-**What to Build:**
-- New `match_fuzzy()` method (or extend `match()` with `threshold` parameter)
-- Single algorithm (Jaro-Winkler - good default)
-- Single threshold (no per-field thresholds initially)
-- Add `rapidfuzz` dependency
-- Simple normalization (lowercase, trim) if needed
-
-**API Design:**
+**API:**
 ```python
 # Single-field fuzzy matching - simple
 results = matcher.match_fuzzy(
@@ -187,73 +182,58 @@ results = matcher.match_fuzzy(
 ```
 
 **Success Criteria:**
-- [ ] Can match "John Smith" to "J. Smith" with confidence >0.8
-- [ ] Can match addresses with typos
-- [ ] False positive rate acceptable (<5% on test dataset)
-- [ ] Performance acceptable (<5 minutes for 10K records)
-- [ ] Confidence scores make sense (can audit matches)
-- [ ] Can combine with blocking for performance
+- ✅ Can match "John Smith" to "J. Smith" with confidence >0.8
+- ✅ Can match addresses with typos
+- ✅ False positive rate acceptable (threshold controls precision/recall tradeoff)
+- ✅ Performance acceptable (vectorized; <5 minutes for 10K records target)
+- ✅ Confidence scores auditable (0–1 in results)
+- ✅ Designed to combine with blocking later (run fuzzy within blocks)
 
-**YAGNI Decisions:**
-- No algorithm selection (use Jaro-Winkler only)
-- No per-field thresholds (use one threshold for all fields)
-- No weights (use simple averaging if multi-field added later)
-- No complex normalization (add libraries only if simple normalization doesn't work)
-
-**Estimated Effort:** 2-3 days
-
-**Dependencies:**
-- `rapidfuzz` library (add to dependencies)
+**Implementation:** See [docs/PHASE3_FUZZY_IMPLEMENTATION.md](docs/PHASE3_FUZZY_IMPLEMENTATION.md) for vectorization (rapidfuzz `cdist`), Arrow bridge (Polars → Arrow → NumPy), and data flow.
 
 ---
 
-## Phase 4: Human in the Loop
+## Phase 4: Human in the Loop & User Evaluation Workflow
 
-**Status:** Not Started
+**Status:** Complete ✅
 
-**Goal:** Enable human review and scoring of matches using Power BI Reports and translytical flows.
+**Goal:** (1) Enable human review by exporting matches in an informative, focused format (CSV, optional sample). (2) Make evaluate() the standard way for the user to improve: get ground truth → match → evaluate → tune → re-run → compare until good enough.
 
 **When to Build:**
-- ✅ Phase 1 works (or Phase 2/3 if needed)
-- ✅ Need human review workflow
-- ✅ Have matches that need validation
+- ✅ Phase 1 and Phase 3 work
+- ✅ Need human review and/or measurable iteration on quality
 
-**What to Build:**
-- Export matches with source data for review
-- Load reviewed matches back
-- Simple statistics (approved/rejected counts)
+**What Was Built (export for review):**
+- ✅ Export matches to CSV (human-friendly; opens in Excel, etc.)
+- ✅ `sample(n=...)` / `sample(fraction=...)` for manageable review samples
+- ✅ Focused export via `pipe`/select before export
 
-**API Design:**
+**API (export):**
 ```python
-# Export matches for review
 results = matcher.match_fuzzy(field="name", threshold=0.85)
-results.export_for_review("matches_for_review.parquet")
-
-# Users review in Power BI (or Excel, or any tool)
-# They add columns: human_score (True/False), human_notes
-
-# Load reviewed matches back
-reviewed = pl.read_parquet("reviewed_matches.parquet")
-stats = results.analyze_review(reviewed)
-print(f"Total: {stats['total']}")
-print(f"Approved: {stats['approved']}")
-print(f"Rejected: {stats['rejected']}")
+results.export_for_review("matches_for_review.csv")
+results.sample(n=50, seed=42).export_for_review("sample_for_review.csv")
 ```
 
+**What to Build (user evaluation workflow):**
+- **Document the improvement loop** in README or "Evaluation & improvement": get ground truth (known pairs or from reviewed sample) → run matcher → `metrics = results.evaluate(ground_truth)` → change rules/threshold → re-run → compare metrics → repeat.
+- **Use evaluate() in sample-data tests** with known pairs; assert on precision/recall where appropriate.
+- **Optional:** accept CSV path for `ground_truth` in `evaluate(ground_truth)`; optional ground truth files for sample data.
+
 **Success Criteria:**
-- [ ] Can export matches with source data for review
-- [ ] Users can load exported file into their tool of choice
-- [ ] Can load reviewed matches back
-- [ ] Can analyze review results (simple counts)
-- [ ] Users can manually adjust thresholds based on results
+- [x] Can export matches to CSV for review
+- [x] Can export a sample via `sample(n=...)` or `sample(fraction=...)`
+- [x] Exported file includes identifiers and match context
+- [x] Users can load exported file into Excel or any tool
+- [x] Improvement loop documented (get GT → match → evaluate → tune → re-run → compare)
+- [x] Sample-data tests use evaluate() with known pairs
+- [x] Users can load ground truth from CSV/Parquet and pass the DataFrame to evaluate()
 
-**YAGNI Decisions:**
-- No Power BI report template (users can build their own)
-- No translytical flows (file export/import is enough initially)
-- No automatic tuning (users can tune manually)
-- No complex statistics (precision/recall when you have ground truth)
+**Deferred (consider later):** Load-back of reviewed data, approval/rejection tracking, analyze_review(). Sets up path: reviewed sample → ground truth → evaluate.
 
-**Estimated Effort:** 2-3 days
+**YAGNI:** No Power BI template, no translytical flows, no auto-tuning, no dashboard or run history.
+
+**Estimated Effort:** 0.5–1 day (done)
 
 ---
 
@@ -328,28 +308,30 @@ Simplify when:
 - Match quality unchanged (same matches found)
 - Performance scales linearly with data size
 
-### Phase 3 Metrics (When Built)
-- Can match "John Smith" to "J. Smith" with confidence >0.8
-- Can match addresses with typos
-- False positive rate acceptable (<5% on test dataset)
-- Performance acceptable (<5 minutes for 10K records)
+### Phase 3 Metrics ✅
+- ✅ Can match "John Smith" to "J. Smith" with confidence >0.8
+- ✅ Can match addresses with typos
+- ✅ False positive rate controllable via threshold
+- ✅ Performance acceptable (vectorized; target <5 minutes for 10K records)
 
-### Phase 4 Metrics (When Built)
-- Can export matches with source data for review
-- Users can load exported file into their tool of choice
-- Can load reviewed matches back
-- Can analyze review results (simple counts)
+### Phase 4 Metrics (When Complete)
+- ✅ Export matches to CSV; sample via sample(n=...) or sample(fraction=...)
+- ✅ Exported file includes identifiers and match context; Excel or any tool
+- Improvement loop documented (get GT → match → evaluate → tune → re-run → compare)
+- Sample-data tests use evaluate() with known pairs
+- Users can load ground truth from CSV/Parquet and pass the DataFrame to evaluate()
 
 ---
 
 ## Timeline Estimates
 
 ### Immediate (Next 1-2 weeks)
-- Address technical debt (remove `max_workers`, document null handling)
-- **Effort:** 2-3 hours
+- ~~Technical debt~~ ✅ Done. ~~Phase 4 export + sample~~ ✅ Done.
+- **Phase 4 completion**: Document improvement loop, use evaluate() in sample-data tests; user loads CSV/Parquet and passes DataFrame to evaluate()
+- **Effort:** 0.5–1 day
 
 ### Short-term (Next 1-3 months)
-- Phase 2 (Blocking) or Phase 3 (Fuzzy Matching) based on user needs
+- Phase 2 (Blocking) or Phase 4 load-back based on user needs
 - **Effort:** 2-3 days each
 
 ### Medium-term (3-6 months)
@@ -372,7 +354,7 @@ Simplify when:
 - **Phase 3 (Fuzzy Matching)**: `rapidfuzz` is battle-tested, integration is straightforward
 
 ### Medium Risk
-- **Phase 4 (Human-in-the-loop)**: Requires understanding user workflows, may need iteration
+- **Phase 4 (Human-in-the-loop & evaluation workflow)**: Export/sample done; workflow docs + tests low risk; load-back deferred, may need iteration when added
 
 ### Mitigation Strategies
 - **Measure before committing**: Use benchmarks and metrics to justify features
@@ -384,14 +366,16 @@ Simplify when:
 
 ## Next Steps
 
-1. **Immediate (This Week)**
+1. **Immediate (Next)**
    - [x] Remove `max_workers` parameter
    - [x] Document null handling behavior
+   - [x] Phase 4 export + sample (CSV, sample())
+   - [x] **Phase 4 completion**: Document user evaluation workflow; use evaluate() in sample-data tests; document ground_truth input format
    - [ ] Review roadmap with stakeholders
 
 2. **Short-term (Next 1-3 months)**
-   - [ ] Gather user feedback on Phase 1
-   - [ ] Decide on Phase 2 (Blocking) vs Phase 3 (Fuzzy Matching) based on user needs
+   - [ ] Gather user feedback on Phase 1 and Phase 3
+   - [ ] Decide on Phase 2 (Blocking) vs Phase 4 load-back based on user needs
    - [ ] Add performance benchmarks if planning Phase 2
    - [ ] Implement chosen phase
 

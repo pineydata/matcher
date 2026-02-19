@@ -1,48 +1,48 @@
 ---
-title: PR Summary - Phase 3 Fuzzy Matching
-tags: [enhancement, feature]
+title: PR Summary - Phase 4: Human in the Loop, Evaluation Workflow & Threshold Tuning
+tags: [enhancement, feature, documentation]
 ---
 
 ## Overview
 
-- **Fuzzy matching API**: `Matcher.match_fuzzy(field=..., threshold=0.85)` and `Deduplicator.match_fuzzy(...)` for typo-tolerant matching on a single string column using Jaro–Winkler similarity.
-- **Vectorized pipeline**: Polars → Arrow → rapidfuzz `cdist` (no row-by-row Python loops); single batch similarity matrix, multi-core via `workers=-1`.
-- **Same result shape as exact match**: Full joined rows plus `confidence` (0–1); `evaluate()` and `refine()` work unchanged.
+- **Phase 4 complete**: Export matches for human review (CSV + optional sample) and a documented improvement loop so users can improve matching over time.
+- **evaluate(ground_truth)** takes a **DataFrame** only (you load CSV/Parquet); API stays "you load data, matcher operates on it."
+- **find_best_threshold()** sweeps confidence thresholds on fuzzy results and returns the threshold that maximizes F1, plus a curve for plotting—data-driven tuning instead of guessing.
+- **PR feedback addressed**: Docs aligned to DataFrame-only API; evaluator right-id resolution when left/right id share the same name; fail-fast validation for `sample()` (n, fraction) and `find_best_threshold(thresholds)`.
 
 ## Key Changes
 
-### Dependencies
+### Export for review & evaluation (Phase 4)
 
-- `pyproject.toml`: Added `rapidfuzz>=3.0.0`, `pyarrow>=14.0.0`, `numpy>=1.24.0` for fuzzy matching and the Polars–rapidfuzz bridge.
+- `matcher/results.py`:
+  - **export_for_review(path)** writes CSV for Excel or any tool; **sample(n=..., fraction=..., seed=...)** for a manageable review sample.
+  - **evaluate(ground_truth)** accepts a DataFrame only; docstring notes loading from file in user code.
+  - **sample()** validates `n >= 0` and `0 < fraction <= 1`; clear ValueError for invalid inputs.
 
-### Matcher
+### Evaluation & threshold tuning
 
-- `matcher/matcher.py`:
-  - New `match_fuzzy(field, threshold=0.85)`: validates field and threshold; drops nulls on field; normalizes (lowercase, strip) in Polars; exports via Arrow to lists; runs `rapidfuzz.process.cdist` with `JaroWinkler.similarity`; builds (left_id, right_id, confidence) pairs and rejoins to full left/right. Returns `MatchResults` with `original_left` for refine/evaluate.
-  - **DRY**: Extracted `_empty_fuzzy_result()` so both "no valid rows" and "no pairs above threshold" use one helper instead of duplicating empty-pairs + join logic.
-  - Handles empty inputs and "no pairs above threshold" with explicit schema so joins don't fail. Uses temp column `_right_id_val` when left_id/right_id share the same name (e.g. both `"id"`).
-  - Module docstring updated with fuzzy usage and dependencies.
+- `matcher/evaluators.py`:
+  - **find_best_threshold(matches, ground_truth, ...)** for fuzzy results with a `confidence` column; returns best_threshold, best_f1, best_precision, best_recall, curve. Validates custom **thresholds**: non-empty, numeric, in [0, 1]; raises clear errors instead of returning None.
+  - **SimpleEvaluator**: When `right_id_col == left_id_col` and a suffixed column (e.g. `id_right`) exists, use the suffixed column so entity-resolution results with default `id` resolve correctly.
+- `matcher/__init__.py`: **find_best_threshold** exported.
 
-### Deduplicator
+### Documentation
 
-- `matcher/deduplicator.py`:
-  - New `match_fuzzy(field, threshold=0.85)`: delegates to `_matcher.match_fuzzy()`, then filters self-matches (`id != id_right`) and returns `MatchResults` with same `original_left`. Docstring and module docs updated.
+- **README.md**: Ground truth as DataFrame only (load with `pl.read_csv`/`pl.read_parquet`); improvement loop step 3 notes `right_id_col="id_right"` for both deduplication and entity resolution when left/right id share the same name.
+- **ROADMAP.md**: Phase 4 success criteria, metrics, timeline, and next steps updated to "load ground truth from CSV/Parquet and pass DataFrame to evaluate()" (no path support).
+- **PR_REVIEW.md**: Summary and strengths updated to reflect DataFrame-only evaluate() API.
 
 ### Tests
 
-- `tests/test_core.py`: Seven fuzzy tests—basic match, typos, missing field (left/right), threshold validation, high threshold fewer matches, empty when no matches, and Deduplicator fuzzy (including no self-matches).
-- `tests/test_with_sample_data.py`: Two sample-data tests—fuzzy entity resolution on `first_name` (≥20 matches, confidence in [0.85, 1]) and fuzzy deduplication (≥50 pairs, no self-matches).
+- `tests/test_core.py`: export_for_review, sample (n, fraction, validation, empty, **n negative**, **fraction out of range**).
+- `tests/test_evaluation.py`: evaluate with DataFrame (CSV/Parquet load); find_best_threshold (structure, curve, **empty thresholds**, **invalid threshold value**); **ground_truth_30_pairs** fixture for DRY.
+- `tests/test_with_sample_data.py`: entity resolution and deduplication with evaluate() and known ground truth.
 
 ## Testing
 
-- All tests passing: `pytest` (55 tests). Fuzzy coverage: unit tests for API, validation, and edge cases; integration tests against generated entity-resolution and deduplication sample data.
-
-## Principles
-
-- **KISS/YAGNI**: Single algorithm (Jaro–Winkler), single threshold, one field; no new algorithm class.
-- **Convention over configuration**: Sensible default threshold 0.85; same `MatchResults` contract as `match()`.
-- **Backward compatibility**: No changes to existing `match()` or `MatchResults`/evaluator contracts.
+- All tests passing: `pytest` (72 tests).
+- Coverage: export-for-review, sample() (including validation), evaluate(DataFrame), find_best_threshold (sweep + confidence error + threshold validation), sample-data evaluation.
 
 ---
 
-**Reminder:** Add GitHub labels to the PR (e.g. `enhancement`, `feature`) so release notes can categorize this change.
+**PR labels**: Add `enhancement` or `feature` and `documentation` on GitHub so release notes group this under new features and docs.

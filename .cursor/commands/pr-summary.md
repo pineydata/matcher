@@ -50,7 +50,8 @@ Organize changes by component/feature area:
 
 ## Output Location
 
-Display the PR summary in a markdown format. Optionally save to a file if requested.
+1. **Save to `PR_SUMMARY.md`** in the project root. Update this file with the generated summary so it persists for the PR description and reviewers.
+2. **Display** the PR summary in your response in markdown format as well.
 
 ## Output Format
 
@@ -99,6 +100,7 @@ tags: [bug, fix]  # or [enhancement, feature], [breaking], [documentation] as ap
 4. **Note testing**: What tests were added or modified?
 5. **Check matcher principles**: Does this align with KISS, YAGNI, and simplicity?
 6. **Check PR labels**: Ensure appropriate labels are present for release notes categorization
+7. **Write to `PR_SUMMARY.md`**: Save the generated summary to the project root file `PR_SUMMARY.md`, then display it in your response
 
 ## hygge/Rails Principles to Highlight
 

@@ -35,6 +35,8 @@ Key Methods:
 - pipe(): Chain arbitrary DataFrame transformations
 - refine(): Apply additional matching rules to unmatched records
 - evaluate(): Compare matches against ground truth and return metrics
+- sample(): Return a random sample of matches (for review or inspection)
+- export_for_review(): Export matches to CSV for human review (Phase 4)
 
 Dependencies:
 - Works with both Matcher and Deduplicator instances
@@ -46,6 +48,8 @@ Design Notes:
 - Stores original_left DataFrame to enable refine() operations
 - Supports both entity resolution and deduplication workflows
 """
+
+from pathlib import Path
 
 import polars as pl
 from polars import DataFrame
@@ -94,6 +98,49 @@ class MatchResults:
             >>> filtered = results.pipe(lambda df: df.filter(pl.col("confidence") > 0.9))
         """
         return MatchResults(func(self.matches), self._original_left)
+
+    def sample(
+        self,
+        n: Optional[int] = None,
+        fraction: Optional[float] = None,
+        seed: Optional[int] = None,
+    ) -> "MatchResults":
+        """Return a random sample of matches (for review or inspection).
+
+        Provide either n (number of rows) or fraction (proportion of rows, 0–1).
+        Useful before export_for_review to send reviewers a manageable sample.
+
+        Args:
+            n: Number of rows to sample (without replacement). If n exceeds the
+                number of rows, all rows are returned.
+            fraction: Fraction of rows to sample (0–1), e.g. 0.1 for 10%.
+            seed: Random seed for reproducibility.
+
+        Returns:
+            New MatchResults with sampled matches.
+
+        Raises:
+            ValueError: If neither n nor fraction is set, or both are set.
+
+        Example:
+            >>> results = matcher.match_fuzzy(field="name", threshold=0.85)
+            >>> results.sample(n=50, seed=42).export_for_review("sample_for_review.csv")
+        """
+        if n is not None and fraction is not None:
+            raise ValueError("Provide either n or fraction, not both.")
+        if n is None and fraction is None:
+            raise ValueError("Provide either n (number of rows) or fraction (0–1).")
+        if n is not None and n < 0:
+            raise ValueError("n must be non-negative.")
+        if fraction is not None and not (0 < fraction <= 1):
+            raise ValueError("fraction must be in the range (0, 1].")
+        if self.matches.height == 0:
+            return MatchResults(self.matches, self._original_left)
+        if n is not None:
+            sampled = self.matches.sample(n=min(n, self.matches.height), seed=seed)
+        else:
+            sampled = self.matches.sample(fraction=fraction, seed=seed)
+        return MatchResults(sampled, self._original_left)
 
     def refine(
         self,
@@ -214,7 +261,7 @@ class MatchResults:
 
     def evaluate(
         self,
-        ground_truth: Union[DataFrame, str],
+        ground_truth: DataFrame,
         left_id_col: str = "id",
         right_id_col: str = "id",
         evaluator: Optional["Evaluator"] = None
@@ -222,8 +269,8 @@ class MatchResults:
         """Evaluate matches against ground truth.
 
         Args:
-            ground_truth: DataFrame with known matches (must have left_id, right_id columns)
-                         or path to parquet file
+            ground_truth: DataFrame with known matches (must have left_id, right_id columns).
+                         Load from CSV/Parquet yourself if needed, e.g. pl.read_csv(path).
             left_id_col: Column name for left ID in matches (default: "id")
             right_id_col: Column name for right ID in matches (default: "id" or "id_right" for dedup)
             evaluator: Evaluator component (default: SimpleEvaluator)
@@ -241,10 +288,6 @@ class MatchResults:
             >>> print(f"Precision: {metrics['precision']:.2%}")
             >>> print(f"Recall: {metrics['recall']:.2%}")
         """
-        # Load ground truth if it's a path
-        if isinstance(ground_truth, str):
-            ground_truth = pl.read_parquet(ground_truth)
-
         # Use default evaluator if not provided
         if evaluator is None:
             evaluator = SimpleEvaluator()
@@ -255,3 +298,25 @@ class MatchResults:
             left_id_col=left_id_col,
             right_id_col=right_id_col
         )
+
+    def export_for_review(self, path: Union[str, Path]) -> None:
+        """Export match results to CSV for human review.
+
+        Writes the matches DataFrame to CSV so reviewers can open it in Excel
+        or any spreadsheet tool. The file includes identifiers and joined
+        columns so reviewers have enough context without opening other systems.
+        Use sample() first to export a manageable sample, or pipe/select for
+        a focused set of columns.
+
+        Args:
+            path: Output path for the CSV file (str or pathlib.Path; use .csv).
+
+        Example:
+            >>> results = matcher.match_fuzzy(field="name", threshold=0.85)
+            >>> results.export_for_review("matches_for_review.csv")
+            >>> # Export a sample for reviewers
+            >>> results.sample(n=50, seed=42).export_for_review("sample_for_review.csv")
+            >>> # Focused export: only selected columns
+            >>> results.pipe(lambda df: df.select(["id", "id_right", "confidence", "name", "name_right"])).export_for_review("review.csv")
+        """
+        self.matches.write_csv(path)
