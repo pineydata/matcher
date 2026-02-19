@@ -199,7 +199,7 @@ Use evaluate so **you** can improve: get ground truth, run match, evaluate, chan
 1. **Get ground truth** — Known pairs (e.g. from a human-reviewed sample or existing labels) as a DataFrame with `left_id` and `right_id`. Load from CSV or Parquet if needed: `ground_truth = pl.read_csv("reviewed.csv")`.
 2. **Run your matcher** — e.g. `results = matcher.match(rules="email")` or `matcher.match_fuzzy(field="name", threshold=0.85)`.
 3. **Evaluate** — `metrics = results.evaluate(ground_truth)`. For deduplication, or when the left and right id columns share the same name (e.g. both `id`), pass `right_id_col="id_right"` so the evaluator can correctly resolve right-side ids.
-4. **Change something** — Adjust rules, threshold, or (later) blocking.
+4. **Change something** — Adjust rules, threshold, or blocking_key.
 5. **Re-run and compare** — Run again, call `evaluate(ground_truth)`, compare precision/recall/F1 to the previous run.
 6. **Repeat** until quality is good enough.
 

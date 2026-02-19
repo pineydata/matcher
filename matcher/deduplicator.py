@@ -28,6 +28,7 @@ Differences from Matcher:
 - Uses id_col for both left_id and right_id
 - Automatically filters self-matches (where id == id_right)
 - Same rule syntax and matching logic as Matcher
+- Optional blocking_key on match() and match_fuzzy() for performance (same as Matcher)
 - match_fuzzy() delegates to Matcher.match_fuzzy() and filters self-matches
 
 Dependencies:
@@ -81,11 +82,14 @@ class Deduplicator:
 
     def match(
         self,
-        rules: Union[str, list[str], list[Union[str, list[str]]]]
+        rules: Union[str, list[str], list[Union[str, list[str]]]],
+        blocking_key: Optional[str] = None
     ) -> MatchResults:
         """Perform deduplication using the configured matching algorithm.
 
         Rules are processed sequentially and combined with OR logic.
+        Optional blocking_key restricts comparisons to records with the same
+        value in that column (e.g. zip_code), reducing work for large sources.
 
         Args:
             rules: Matching rule(s). Can be:
@@ -96,25 +100,18 @@ class Deduplicator:
 
                   Records match if ANY rule matches (OR logic).
                   Within a rule, all fields must match together (AND logic).
+            blocking_key: Optional column name. When set, only records with the same
+                          value in this column are compared (e.g. "zip_code").
 
         Returns:
             MatchResults object with duplicate pairs (self-matches filtered out)
 
         Examples:
-            >>> # Single field
             >>> results = deduplicator.match(rules="email")
-            >>> # Single rule, single field
-            >>> results = deduplicator.match(rules=["email"])
-            >>> # Single rule, multiple fields
-            >>> results = deduplicator.match(rules=["email", "zip_code"])
-            >>> # Multiple rules: match if email OR (first_name AND last_name)
-            >>> results = deduplicator.match(rules=[
-            ...     "email",
-            ...     ["first_name", "last_name"]
-            ... ])
+            >>> results = deduplicator.match(rules="email", blocking_key="zip_code")
         """
         # Delegate to Matcher
-        results = self._matcher.match(rules)
+        results = self._matcher.match(rules, blocking_key=blocking_key)
 
         # Filter self-matches (id_col == id_col_right)
         id_col_right = f"{self._id_col}_right"
@@ -127,24 +124,30 @@ class Deduplicator:
     def match_fuzzy(
         self,
         field: str,
-        threshold: float = 0.85
+        threshold: float = 0.85,
+        blocking_key: Optional[str] = None
     ) -> MatchResults:
         """Fuzzy deduplication on a single string field using Jaro-Winkler similarity.
 
         Delegates to Matcher.match_fuzzy() then filters out self-matches
-        (where id_col == id_col_right).
+        (where id_col == id_col_right). Optional blocking_key runs fuzzy only
+        within blocks to reduce memory and comparisons.
 
         Args:
             field: Single column name to match on (string values).
             threshold: Minimum similarity in [0, 1] to count as a match (default 0.85).
+            blocking_key: Optional column name to restrict comparisons to same block.
 
         Returns:
             MatchResults with duplicate pairs and 'confidence' column (self-matches excluded).
 
         Example:
             >>> results = deduplicator.match_fuzzy(field="name", threshold=0.85)
+            >>> results = deduplicator.match_fuzzy(field="name", blocking_key="zip_code")
         """
-        results = self._matcher.match_fuzzy(field=field, threshold=threshold)
+        results = self._matcher.match_fuzzy(
+            field=field, threshold=threshold, blocking_key=blocking_key
+        )
         id_col_right = f"{self._id_col}_right"
         filtered_matches = results.matches.filter(
             pl.col(self._id_col) != pl.col(id_col_right)
