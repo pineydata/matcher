@@ -130,11 +130,13 @@ Review code for adherence to matcher's development principles: DRY, KISS, YAGNI,
 
 ## Review Output
 
-Provide:
-- **Strengths**: What's working well
-- **Issues**: Specific violations of DRY/KISS/YAGNI or matcher principles
-- **Fallback Warnings**: Any second-guess fallbacks that should be removed or made explicit
-- **Suggestions**: Concrete improvements with code examples
-- **Questions**: Areas that need clarification
+1. **Write to `.dev/PR_REVIEW.md`**: Save the generated review to `.dev/PR_REVIEW.md`, then display it in your response.
+
+2. **Content to provide:**
+   - **Strengths**: What's working well
+   - **Issues**: Specific violations of DRY/KISS/YAGNI or matcher principles
+   - **Fallback Warnings**: Any second-guess fallbacks that should be removed or made explicit
+   - **Suggestions**: Concrete improvements with code examples
+   - **Questions**: Areas that need clarification
 
 Be direct and candid (not deferential), focusing on matcher's ethos of simplicity, clarity, and incremental development, guided by hygge's comfort and Rails-inspired programmer happiness.
