@@ -42,6 +42,9 @@ htmlcov/
 # uv
 uv.lock
 
+# Local dev / review artifacts
+.dev/
+
 # OS
 .DS_Store
 Thumbs.db

@@ -70,7 +70,7 @@
 **Phases Available:**
 - Phase 2 (Blocking) - if not done in Period 2
 - Phase 3 (Fuzzy Matching) - if not done in Period 2
-- Phase 4 (Human-in-the-Loop) - export/import workflow for Power BI integration
+- Phase 4 (Human-in-the-Loop) - export matches for review (load-back/acceptance tracking deferred)
 
 **Decision Framework:** Build only when there's a real, current use case (YAGNI principle).
 
@@ -148,9 +148,10 @@
 - <5 minutes for 10K records
 
 ### Phase 4 (When Built)
-- Export/import workflow functional
-- Users can review matches in Power BI
-- Review statistics available
+- Export matches to CSV for review (human-friendly)
+- sample(n=...) / sample(fraction=...) for manageable review samples
+- Exported file is informative (identifiers + context) without TMI
+- Users can review in Excel, Power BI, or any tool (load-back/acceptance tracking deferred)
 
 ---
 

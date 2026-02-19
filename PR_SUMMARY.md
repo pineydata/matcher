@@ -1,48 +1,45 @@
 ---
-title: PR Summary - Phase 3 Fuzzy Matching
-tags: [enhancement, feature]
+title: PR Summary - Phase 4: Human in the Loop, Evaluation Workflow & Threshold Tuning
+tags: [enhancement, feature, documentation]
 ---
 
 ## Overview
 
-- **Fuzzy matching API**: `Matcher.match_fuzzy(field=..., threshold=0.85)` and `Deduplicator.match_fuzzy(...)` for typo-tolerant matching on a single string column using Jaro–Winkler similarity.
-- **Vectorized pipeline**: Polars → Arrow → rapidfuzz `cdist` (no row-by-row Python loops); single batch similarity matrix, multi-core via `workers=-1`.
-- **Same result shape as exact match**: Full joined rows plus `confidence` (0–1); `evaluate()` and `refine()` work unchanged.
+- **Phase 4 complete**: Export matches for human review (CSV + optional sample) and a documented improvement loop so users can improve matching over time.
+- **evaluate(ground_truth)** takes a **DataFrame** only (you load CSV/Parquet); API stays "you load data, matcher operates on it."
+- **find_best_threshold()** sweeps confidence thresholds on fuzzy results and returns the threshold that maximizes F1, plus a curve for plotting—data-driven tuning instead of guessing (e.g. 0.85).
+- **README** documents the improvement loop and export-for-review with `sample()`; evaluation tests use known pairs and precision/recall.
 
 ## Key Changes
 
-### Dependencies
+### Export for review & evaluation (Phase 4)
 
-- `pyproject.toml`: Added `rapidfuzz>=3.0.0`, `pyarrow>=14.0.0`, `numpy>=1.24.0` for fuzzy matching and the Polars–rapidfuzz bridge.
+- `matcher/results.py`:
+  - **export_for_review(path)** writes **CSV** for Excel or any tool; **sample(n=..., fraction=..., seed=...)** for a manageable review sample (e.g. `results.sample(n=50, seed=42).export_for_review("sample.csv")`).
+  - **evaluate(ground_truth)** accepts a **DataFrame** only; docstring notes loading from file in user code. **sample()** docstring notes that when `n` exceeds row count, all rows are returned.
 
-### Matcher
+### Threshold tuning (fuzzy)
 
-- `matcher/matcher.py`:
-  - New `match_fuzzy(field, threshold=0.85)`: validates field and threshold; drops nulls on field; normalizes (lowercase, strip) in Polars; exports via Arrow to lists; runs `rapidfuzz.process.cdist` with `JaroWinkler.similarity`; builds (left_id, right_id, confidence) pairs and rejoins to full left/right. Returns `MatchResults` with `original_left` for refine/evaluate.
-  - **DRY**: Extracted `_empty_fuzzy_result()` so both "no valid rows" and "no pairs above threshold" use one helper instead of duplicating empty-pairs + join logic.
-  - Handles empty inputs and "no pairs above threshold" with explicit schema so joins don't fail. Uses temp column `_right_id_val` when left_id/right_id share the same name (e.g. both `"id"`).
-  - Module docstring updated with fuzzy usage and dependencies.
+- `matcher/evaluators.py`:
+  - **find_best_threshold(matches, ground_truth, ...)** for fuzzy match results with a `confidence` column. Sweeps a default grid (0.50–1.00, step 0.05), at each step keeps pairs with confidence ≥ threshold and evaluates with SimpleEvaluator. Returns **best_threshold**, **best_f1**, **best_precision**, **best_recall**, and **curve** (list of threshold/precision/recall/f1 for plotting). Optional **thresholds** and **evaluator** args. Raises if `matches` has no `confidence` column.
+- `matcher/__init__.py`: **find_best_threshold** exported.
 
-### Deduplicator
+### Documentation
 
-- `matcher/deduplicator.py`:
-  - New `match_fuzzy(field, threshold=0.85)`: delegates to `_matcher.match_fuzzy()`, then filters self-matches (`id != id_right`) and returns `MatchResults` with same `original_left`. Docstring and module docs updated.
+- `README.md`: Improvement loop (six steps), evaluate with DataFrame and "load from CSV if needed," export-for-review with CSV and `sample()`, threshold-comparison example.
+- `ROADMAP.md` / `INVESTMENT_PLAN.md`: Phase 4 wording and completion status.
 
 ### Tests
 
-- `tests/test_core.py`: Seven fuzzy tests—basic match, typos, missing field (left/right), threshold validation, high threshold fewer matches, empty when no matches, and Deduplicator fuzzy (including no self-matches).
-- `tests/test_with_sample_data.py`: Two sample-data tests—fuzzy entity resolution on `first_name` (≥20 matches, confidence in [0.85, 1]) and fuzzy deduplication (≥50 pairs, no self-matches).
+- `tests/test_core.py`: export_for_review (CSV round-trip), sample (n, fraction, validation, empty).
+- `tests/test_evaluation.py`: evaluate with DataFrame (including after loading from CSV/Parquet); **find_best_threshold** (structure, best_f1 is max over curve, curve length); **find_best_threshold_requires_confidence** (clear error when no confidence column).
+- `tests/test_with_sample_data.py`: entity resolution and deduplication with evaluate() and known ground truth (precision/recall assertions).
 
 ## Testing
 
-- All tests passing: `pytest` (55 tests). Fuzzy coverage: unit tests for API, validation, and edge cases; integration tests against generated entity-resolution and deduplication sample data.
-
-## Principles
-
-- **KISS/YAGNI**: Single algorithm (Jaro–Winkler), single threshold, one field; no new algorithm class.
-- **Convention over configuration**: Sensible default threshold 0.85; same `MatchResults` contract as `match()`.
-- **Backward compatibility**: No changes to existing `match()` or `MatchResults`/evaluator contracts.
+- All tests passing: `pytest` (68 tests).
+- Coverage: export-for-review, sample(), evaluate(DataFrame), find_best_threshold (sweep + error path), sample-data evaluation.
 
 ---
 
-**Reminder:** Add GitHub labels to the PR (e.g. `enhancement`, `feature`) so release notes can categorize this change.
+**PR labels**: Add `enhancement` or `feature` and `documentation` on GitHub so release notes group this under new features and docs.

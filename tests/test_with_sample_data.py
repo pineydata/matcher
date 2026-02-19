@@ -55,52 +55,64 @@ def test_deduplication_with_sample_data(sample_data_dir):
     deduplicator = Deduplicator(source=df, id_col="id")
     results = deduplicator.match(rules="email")
 
-    # Should find 50 duplicate pairs
-    # Note: self-join creates pairs, so we expect matches
-    # The exact count depends on how we handle self-matches
     assert results.count > 0, "Should find some duplicate pairs"
-
-    # Verify structure
     assert "email" in results.matches.columns
 
 
+def test_deduplication_evaluate_with_ground_truth(sample_data_dir):
+    """Use evaluate() with ground truth derived from duplicate groups (improvement workflow)."""
+    source_path = sample_data_dir / "ExactMatcher" / "deduplication" / "customers.parquet"
+    df = pl.read_parquet(source_path)
+
+    # Build ground truth: pairs of IDs that share the same email (known duplicates)
+    ground_truth_data = []
+    email_groups = df.group_by("email").agg(pl.col("id").alias("ids"))
+    for row in email_groups.iter_rows(named=True):
+        ids = row["ids"]
+        if len(ids) > 1:
+            for i in range(len(ids)):
+                for j in range(i + 1, len(ids)):
+                    ground_truth_data.append({"left_id": ids[i], "right_id": ids[j]})
+    ground_truth = pl.DataFrame(ground_truth_data)
+
+    deduplicator = Deduplicator(source=df, id_col="id")
+    results = deduplicator.match(rules="email")
+
+    metrics = results.evaluate(ground_truth, left_id_col="id", right_id_col="id_right")
+
+    assert metrics["true_positives"] > 0
+    assert 0 <= metrics["precision"] <= 1.0
+    assert 0 <= metrics["recall"] <= 1.0
+    assert metrics["f1"] >= 0
+
+
 def test_entity_resolution_ground_truth_validation(sample_data_dir):
-    """Validate that we find all known matches from ground truth."""
+    """Validate that we find all known matches using evaluate() with ground truth."""
     left_path = sample_data_dir / "ExactMatcher" / "entity_resolution" / "customers_a.parquet"
     right_path = sample_data_dir / "ExactMatcher" / "entity_resolution" / "customers_b.parquet"
 
-    # Load data
     left_df = pl.read_parquet(left_path)
     right_df = pl.read_parquet(right_path)
 
-    # Known matches: first 40 records in each dataset are paired
-    # They match on different rules (email, name, email+zip, or mixed)
-    known_matches = []
-    for i in range(40):
-        left_id = f"left_{i+1}"
-        right_id = f"right_{i+1}"
-        known_matches.append((left_id, right_id))
+    # Ground truth: first 40 records in each dataset are paired (known matches)
+    ground_truth = pl.DataFrame({
+        "left_id": [f"left_{i+1}" for i in range(40)],
+        "right_id": [f"right_{i+1}" for i in range(40)],
+    })
 
-    # Run matching with OR rules to find all matches (include address+zip for multi-field matches)
     matcher = Matcher(left=left_df, right=right_df, left_id="id", right_id="id")
     results = matcher.match(rules=["email", ["first_name", "last_name"], ["address", "zip_code"]])
 
-    # Verify we found all known matches
-    found_pairs = set()
-    for row in results.matches.iter_rows(named=True):
-        left_id = row.get("id")
-        right_id = row.get("id_right")
-        if left_id and right_id:
-            found_pairs.add((left_id, right_id))
+    # Use evaluate() as the standard way to judge quality (improvement workflow)
+    metrics = results.evaluate(ground_truth, left_id_col="id", right_id_col="id_right")
 
-    # Check that we found matches for all known pairs
-    expected_pairs = set(known_matches)
-    missing = expected_pairs - found_pairs
-    extra = found_pairs - expected_pairs
-
-    # Some extra matches are expected (e.g., multi-field matches also match on email alone)
-    assert len(missing) == 0, f"Missing matches: {missing}"
-    assert results.count >= 40, f"Should find at least 40 matches, got {results.count}"
+    # We must find all known matches (perfect recall)
+    assert metrics["recall"] == 1.0, f"Should find all known matches (recall=1.0), got {metrics['recall']}"
+    assert metrics["true_positives"] == 40
+    assert metrics["false_negatives"] == 0
+    # Some extra pairs are expected (e.g. multi-field matches also match on email alone), so precision may be < 1.0
+    assert metrics["precision"] >= 0.9, f"Precision should be high, got {metrics['precision']}"
+    assert results.count >= 40
 
 
 def test_match_fuzzy_entity_resolution_with_sample_data(sample_data_dir):

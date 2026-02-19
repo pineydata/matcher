@@ -37,11 +37,14 @@ Design Notes:
 - Evaluators are stateless components that can be swapped for different evaluation strategies
 - Supports custom evaluators via dependency injection
 - Handles different column naming conventions in predicted matches for flexibility
+- find_best_threshold: Sweeps confidence thresholds on fuzzy match results and returns the
+  threshold that maximizes F1 (data-driven threshold tuning).
 """
 
 import polars as pl
 from polars import DataFrame
 from abc import ABC, abstractmethod
+from typing import Optional, List
 
 
 class Evaluator(ABC):
@@ -79,7 +82,14 @@ class SimpleEvaluator(Evaluator):
         left_id_col: str = "id",
         right_id_col: str = "id"
     ) -> dict:
-        """Evaluate predicted matches against ground truth."""
+        """Evaluate predicted matches against ground truth.
+
+        Right ID column resolution (explicit, documented fallback): If right_id_col
+        is not present in predicted columns, the evaluator tries in order:
+        'id_right', 'id_match', then '{left_id_col}_right'. If none exist,
+        ValueError is raised. Pass the actual column name (e.g. right_id_col="id_right")
+        to avoid ambiguity and make behavior explicit.
+        """
         # Normalize ground truth to have left_id and right_id columns
         if "left_id" not in ground_truth.columns or "right_id" not in ground_truth.columns:
             raise ValueError(
@@ -88,23 +98,20 @@ class SimpleEvaluator(Evaluator):
             )
 
         # Create normalized predicted matches DataFrame
-        # Handle different column naming in predicted matches
+        # Resolve right ID column: use right_id_col if present, else try known conventions (documented above)
         pred_left_col = left_id_col
         pred_right_col = right_id_col
 
-        # For deduplication, right_id might be id_right (unified naming) or id_match (backward compat)
         if pred_right_col not in predicted.columns:
-            # Try common alternatives
-            if "id_right" in predicted.columns:
-                pred_right_col = "id_right"
-            elif "id_match" in predicted.columns:
-                pred_right_col = "id_match"  # Backward compatibility
-            elif f"{left_id_col}_right" in predicted.columns:
-                pred_right_col = f"{left_id_col}_right"
+            alternatives = ["id_right", "id_match", f"{left_id_col}_right"]
+            for alt in alternatives:
+                if alt in predicted.columns:
+                    pred_right_col = alt
+                    break
             else:
                 raise ValueError(
-                    f"Could not find right ID column. Expected '{right_id_col}' or alternatives. "
-                    f"Found columns: {predicted.columns}"
+                    f"Could not find right ID column. Tried '{right_id_col}', then "
+                    f"{alternatives}. Found columns: {predicted.columns}"
                 )
 
         # Create normalized predicted pairs
@@ -158,3 +165,86 @@ class SimpleEvaluator(Evaluator):
             "total_predicted": len(predicted_set),
             "total_ground_truth": len(ground_truth_set),
         }
+
+
+def find_best_threshold(
+    matches: DataFrame,
+    ground_truth: DataFrame,
+    left_id_col: str = "id",
+    right_id_col: str = "id",
+    evaluator: Optional[Evaluator] = None,
+    thresholds: Optional[List[float]] = None,
+) -> dict:
+    """Find the confidence threshold that maximizes F1 for fuzzy match results.
+
+    Sweeps thresholds over the matches' confidence column, at each step keeps only
+    pairs with confidence >= threshold, then evaluates with the given evaluator.
+    Returns the threshold and metrics that give the highest F1, plus the full curve
+    for optional plotting.
+
+    Use this when you have fuzzy MatchResults and ground truth and want to choose
+    a threshold from data instead of guessing (e.g. 0.85).
+
+    Args:
+        matches: DataFrame of fuzzy matches with a 'confidence' column (from match_fuzzy).
+        ground_truth: DataFrame with left_id and right_id columns (known true pairs).
+        left_id_col: Column name for left ID in matches (default: "id").
+        right_id_col: Column name for right ID in matches (default: "id" or "id_right").
+        evaluator: Evaluator to use (default: SimpleEvaluator()).
+        thresholds: List of thresholds to try (default: 0.50, 0.55, ..., 1.00).
+
+    Returns:
+        dict with:
+        - best_threshold: threshold that achieved best F1
+        - best_f1, best_precision, best_recall: metrics at best threshold
+        - curve: list of dicts {threshold, precision, recall, f1} for each threshold
+
+    Example:
+        >>> # Run fuzzy with a low threshold so you have scored pairs to sweep
+        >>> results = matcher.match_fuzzy(field="name", threshold=0.5)
+        >>> best = find_best_threshold(results.matches, ground_truth, right_id_col="id_right")
+        >>> print(f"Best threshold: {best['best_threshold']}, F1: {best['best_f1']:.2%}")
+    """
+    if "confidence" not in matches.columns:
+        raise ValueError(
+            "find_best_threshold requires a 'confidence' column (use match_fuzzy results). "
+            f"Columns: {matches.columns}"
+        )
+    if evaluator is None:
+        evaluator = SimpleEvaluator()
+    if thresholds is None:
+        thresholds = [round(0.5 + i * 0.05, 2) for i in range(11)]  # 0.50 .. 1.00
+
+    curve = []
+    best_f1 = -1.0
+    best_threshold = None
+    best_precision = None
+    best_recall = None
+
+    for t in thresholds:
+        filtered = matches.filter(pl.col("confidence") >= t)
+        metrics = evaluator.evaluate(
+            filtered,
+            ground_truth,
+            left_id_col=left_id_col,
+            right_id_col=right_id_col,
+        )
+        curve.append({
+            "threshold": t,
+            "precision": metrics["precision"],
+            "recall": metrics["recall"],
+            "f1": metrics["f1"],
+        })
+        if metrics["f1"] > best_f1:
+            best_f1 = metrics["f1"]
+            best_threshold = t
+            best_precision = metrics["precision"]
+            best_recall = metrics["recall"]
+
+    return {
+        "best_threshold": best_threshold,
+        "best_f1": best_f1,
+        "best_precision": best_precision,
+        "best_recall": best_recall,
+        "curve": curve,
+    }
