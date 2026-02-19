@@ -2,15 +2,6 @@
 
 A cozy, comfortable matching library that makes entity resolution and deduplication feel natural.
 
-## Philosophy
-
-hygge (pronounced "hoo-ga") is a Danish word representing comfort, coziness, and well-being. This library brings those qualities to entity resolution and deduplication:
-
-- **Comfort**: You should relax while you match some records.
-- **Simplicity**: Clean, intuitive APIs that feel natural
-- **Reliability**: Robust, predictable behavior without surprises
-- **Flow**: Smooth, efficient matching without friction
-
 ## Overview
 
 matcher is a lightweight library for matching records across data sources (entity resolution) and identifying duplicate records within a single source (deduplication). Built on **Polars** for optimal performance, it provides a cozy, notebook-friendly API that makes matching feel natural and comfortable.
