@@ -38,7 +38,7 @@ Dependencies:
 """
 
 from polars import DataFrame
-from typing import Union, Optional
+from typing import Union, Optional, List
 from matcher.algorithms import MatchingAlgorithm
 from matcher.matcher import Matcher
 from matcher.results import MatchResults
@@ -83,7 +83,7 @@ class Deduplicator:
     def match(
         self,
         rules: Union[str, list[str], list[Union[str, list[str]]]],
-        blocking_key: Optional[str] = None
+        blocking_key: Optional[Union[str, List[Optional[str]]]] = None
     ) -> MatchResults:
         """Perform deduplication using the configured matching algorithm.
 
@@ -100,8 +100,8 @@ class Deduplicator:
 
                   Records match if ANY rule matches (OR logic).
                   Within a rule, all fields must match together (AND logic).
-            blocking_key: Optional column name. When set, only records with the same
-                          value in this column are compared (e.g. "zip_code").
+            blocking_key: Optional. Same as Matcher: str for one key for all rules, or
+                          list of str or None (one per rule). See Matcher.match().
 
         Returns:
             MatchResults object with duplicate pairs (self-matches filtered out)
@@ -109,6 +109,7 @@ class Deduplicator:
         Examples:
             >>> results = deduplicator.match(rules="email")
             >>> results = deduplicator.match(rules="email", blocking_key="zip_code")
+            >>> results = deduplicator.match(rules=[["email"], ["name"]], blocking_key=["zip_code", "state"])
         """
         # Delegate to Matcher
         results = self._matcher.match(rules, blocking_key=blocking_key)

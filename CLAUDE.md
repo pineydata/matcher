@@ -1,12 +1,12 @@
 # CLAUDE.md - Project Context for AI Assistants
 
-This file provides context and guidelines for AI assistants working on the hygge-match project.  See [](README.md)
+This file provides context and guidelines for AI assistants working on the matcher project.  See [](README.md)
 
 ---
 
 ## Project Overview
 
-**hygge-match** (repository: `hygge-match`) is a Python library for entity resolution and deduplication, built with a focus on comfort, simplicity, and incremental development. The library follows hygge philosophy: making matching feel natural, comfortable, and reliable.
+**matcher** (repository: `matcher`) is a Python library for entity resolution and deduplication, built with a focus on comfort, simplicity, and incremental development. The library follows hygge philosophy: making matching feel natural, comfortable, and reliable.
 
 **Core Purpose:**
 - Match records across data sources (entity resolution)
@@ -26,7 +26,7 @@ This file provides context and guidelines for AI assistants working on the hygge
 
 ### hygge Core Values
 
-hygge-match embodies hygge philosophy in every aspect:
+matcher embodies hygge philosophy in every aspect:
 
 - **Comfort**: APIs should feel natural and comfortable to use - you should relax while you match some records
 - **Simplicity**: Clean, intuitive APIs that feel natural - no unnecessary complexity

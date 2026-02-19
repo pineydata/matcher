@@ -1,4 +1,4 @@
-# hygge-match: Investment Planning Summary
+# matcher: Investment Planning Summary
 
 **Status:** Phase 1 Complete ✅ | Production Ready
 **Next Decision Point:** Phase 2 (Blocking) or Phase 3 (Fuzzy Matching)
@@ -203,3 +203,20 @@
 **For detailed technical review and roadmap, see:**
 - `TECHNICAL_REVIEW_CURRENT_STATE.md` - Comprehensive technical assessment
 - `ROADMAP.md` - Detailed phase planning and decision framework
+
+
+ColorTheme =
+DATATABLE(
+    "Theme", STRING,
+    "StatusKey", STRING,
+    "BackgroundColor", STRING,
+    "BorderColor", STRING,
+    "FontColor", STRING,
+    "TextColor", STRING,
+{
+    // Okabe–Ito (3 statuses only)
+    { "Okabe-Ito", "Met",      "#D8F0EA", "#009E73", "#009E73", "#000000" },
+    { "Okabe-Ito", "Probable", "#F8F3CC", "#C4B72A", "#F0E442", "#000000" },
+    { "Okabe-Ito", "Needed",   "",        "#D55E00", "#D55E00", "#000000" }
+}
+)

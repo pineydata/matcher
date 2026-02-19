@@ -1,4 +1,4 @@
-# hygge-match
+# matcher
 
 ![hygge logo](hygge.svg)
 
@@ -15,11 +15,11 @@ hygge (pronounced "hoo-ga") is a Danish word representing comfort, coziness, and
 
 ## Overview
 
-hygge-match is a lightweight library for matching records across data sources (entity resolution) and identifying duplicate records within a single source (deduplication). Built on **Polars** for optimal performance, it provides a cozy, notebook-friendly API that makes matching feel natural and comfortable.
+matcher is a lightweight library for matching records across data sources (entity resolution) and identifying duplicate records within a single source (deduplication). Built on **Polars** for optimal performance, it provides a cozy, notebook-friendly API that makes matching feel natural and comfortable.
 
 ### Built on Polars
 
-hygge-match is built on **Polars** for optimal matching performance. This provides:
+matcher is built on **Polars** for optimal matching performance. This provides:
 
 - Efficient columnar operations for large datasets
 - Automatic parallelization of joins
@@ -39,13 +39,13 @@ We chose Polars because it provides the best balance of performance, developer e
 ## Installation
 
 ```bash
-uv add hygge-match
+uv add matcher
 ```
 
 Or with pip:
 
 ```bash
-pip install hygge-match
+pip install matcher
 ```
 
 ## Quick Start
@@ -84,7 +84,7 @@ Exact matching uses Polars inner joins. Rows where any join key (e.g. `email`, `
 
 ## Data-Driven Development Philosophy
 
-**hygge-match is built for experimentation and comparison.** The ability to swap components, test different approaches, and measure results is foundational to hygge-match's design. This enables data-driven decisions about which matching strategies work best for your specific use case.
+**matcher is built for experimentation and comparison.** The ability to swap components, test different approaches, and measure results is foundational to matcher's design. This enables data-driven decisions about which matching strategies work best for your specific use case.
 
 Like a cozy experiment, you can try different approaches, see what feels right, and choose what works best for your data.
 
@@ -135,7 +135,7 @@ print(f"Case-insensitive: Precision={metrics_ci['precision']:.2%}, Recall={metri
 
 ## Component-Based Architecture
 
-hygge-match uses a component-based architecture (similar to scikit-learn), allowing you to customize matching algorithms:
+matcher uses a component-based architecture (similar to scikit-learn), allowing you to customize matching algorithms:
 
 ```python
 from matcher import Matcher, MatchingAlgorithm
@@ -166,7 +166,7 @@ See `examples/component_usage.py` for more examples.
 
 ## Evaluation & Measurement
 
-hygge-match includes built-in evaluation so you can **measure matching performance and improve over time**. Ground truth should be provided as a Polars `DataFrame` with `left_id` and `right_id` columns listing known true pairs. If your labels are stored on disk (e.g. Parquet or CSV), load them first with `pl.read_parquet` or `pl.read_csv` before calling `evaluate()`.
+matcher includes built-in evaluation so you can **measure matching performance and improve over time**. Ground truth should be provided as a Polars `DataFrame` with `left_id` and `right_id` columns listing known true pairs. If your labels are stored on disk (e.g. Parquet or CSV), load them first with `pl.read_parquet` or `pl.read_csv` before calling `evaluate()`.
 
 ```python
 from matcher import Matcher
@@ -281,7 +281,7 @@ See `MATCHING_PLAN_V2.md` for the implementation plan and `CLAUDE.md` for develo
 
 ## Design Principles
 
-hygge-match follows hygge philosophy in its design:
+matcher follows hygge philosophy in its design:
 
 1. **Comfort Over Complexity**
    - APIs should feel natural and intuitive
@@ -303,4 +303,4 @@ hygge-match follows hygge philosophy in its design:
    - Explicit configuration over implicit behavior
    - Clear error messages and helpful guidance
 
-hygge-match isn't just about matching records - it's about making entity resolution and deduplication feel natural, comfortable, and reliable. Like a warm blanket for your data matching needs.
+matcher isn't just about matching records - it's about making entity resolution and deduplication feel natural, comfortable, and reliable. Like a warm blanket for your data matching needs.
