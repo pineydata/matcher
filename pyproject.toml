@@ -1,5 +1,5 @@
 [project]
-name = "hygge-match"
+name = "matcher"
 version = "0.1.0"
 description = "A cozy, comfortable Python library for entity resolution and deduplication"
 readme = "README.md"

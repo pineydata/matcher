@@ -1,4 +1,4 @@
-"""hygge-match: A cozy, comfortable library for entity resolution and deduplication."""
+"""matcher: A cozy, comfortable library for entity resolution and deduplication."""
 
 from matcher.algorithms import MatchingAlgorithm, ExactMatcher
 from matcher.matcher import Matcher

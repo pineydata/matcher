@@ -586,6 +586,99 @@ def test_match_blocking_key_nulls_form_one_block():
     assert results.matches["id_right"].to_list() == [3]
 
 
+def test_match_blocking_key_per_rule():
+    """Different blocking key per rule: rule 0 blocks by zip, rule 1 by state."""
+    # Left 1 (Alice, 10001, NY), 2 (Bob, 10002, CA). Right 3 (Alice, 10002, NY), 4 (Carol, 10001, CA).
+    # Same zip: (1,4) and (2,3) - no email/name match. Same state: (1,3) NY, (2,4) CA - (1,3) match on name.
+    left = pl.DataFrame({
+        "id": [1, 2],
+        "email": ["a@x.com", "b@x.com"],
+        "name": ["Alice", "Bob"],
+        "zip_code": ["10001", "10002"],
+        "state": ["NY", "CA"],
+    })
+    right = pl.DataFrame({
+        "id": [3, 4],
+        "email": ["a@x.com", "c@x.com"],
+        "name": ["Alice", "Carol"],
+        "zip_code": ["10002", "10001"],
+        "state": ["NY", "CA"],
+    })
+    matcher = Matcher(left=left, right=right, left_id="id", right_id="id")
+    # Per-rule: email within zip (no pair in same zip matches email), name within state → (1,3) match
+    per_rule = matcher.match(
+        rules=[["email"], ["name"]],
+        blocking_key=["zip_code", "state"],
+    )
+    assert per_rule.count == 1
+    assert per_rule.matches["id"].to_list() == [1]
+    assert per_rule.matches["id_right"].to_list() == [3]
+    # Single blocking by zip: both rules in zip blocks; no pair in same zip has matching email or name
+    by_zip = matcher.match(rules=[["email"], ["name"]], blocking_key="zip_code")
+    assert by_zip.count == 0
+
+
+def test_match_blocking_key_list_length_must_match_rules():
+    """blocking_key list length must equal number of rules."""
+    left = pl.DataFrame({"id": [1], "email": ["a@x.com"], "name": ["A"], "zip_code": ["1"]})
+    right = pl.DataFrame({"id": [2], "email": ["a@x.com"], "name": ["A"], "zip_code": ["1"]})
+    matcher = Matcher(left=left, right=right, left_id="id", right_id="id")
+    with pytest.raises(ValueError, match="blocking_key list length.*must equal number of rules"):
+        matcher.match(rules=[["email"], ["name"]], blocking_key=["zip_code"])
+
+
+def test_match_blocking_key_same_key_for_two_rules():
+    """Same blocking key for two rules gives same result as single blocking_key str."""
+    left = pl.DataFrame({
+        "id": [1, 2],
+        "email": ["a@x.com", "b@x.com"],
+        "name": ["Alice", "Bob"],
+        "zip_code": ["10001", "10002"],
+    })
+    right = pl.DataFrame({
+        "id": [3, 4],
+        "email": ["a@x.com", "c@x.com"],
+        "name": ["Alice", "Bob"],
+        "zip_code": ["10001", "10002"],
+    })
+    matcher = Matcher(left=left, right=right, left_id="id", right_id="id")
+    single = matcher.match(rules=[["email"], ["name"]], blocking_key="zip_code")
+    per_rule_same = matcher.match(
+        rules=[["email"], ["name"]],
+        blocking_key=["zip_code", "zip_code"],
+    )
+    assert single.count == per_rule_same.count
+    assert set(single.matches["id"].to_list()) == set(per_rule_same.matches["id"].to_list())
+    assert set(single.matches["id_right"].to_list()) == set(per_rule_same.matches["id_right"].to_list())
+
+
+def test_match_blocking_key_per_rule_none_for_one_rule():
+    """One rule with blocking, one with None (no blocking) for that rule."""
+    left = pl.DataFrame({
+        "id": [1, 2],
+        "email": ["a@x.com", "b@x.com"],
+        "name": ["Alice", "Bob"],
+        "zip_code": ["10001", "10002"],
+    })
+    right = pl.DataFrame({
+        "id": [3, 4],
+        "email": ["a@x.com", "c@x.com"],
+        "name": ["Alice", "Bob"],
+        "zip_code": ["10002", "10001"],
+    })
+    matcher = Matcher(left=left, right=right, left_id="id", right_id="id")
+    # Rule 0 email with zip blocking: 10001 (1,4) no match, 10002 (2,3) no match → 0. Rule 1 name no blocking: (1,3),(1,4),(2,3),(2,4) → (1,3) and (2,4) name match. So 2 matches from rule 1.
+    results = matcher.match(
+        rules=[["email"], ["name"]],
+        blocking_key=["zip_code", None],
+    )
+    assert results.count == 2
+    ids = sorted(results.matches["id"].to_list())
+    assert ids == [1, 2]
+    ids_right = sorted(results.matches["id_right"].to_list())
+    assert ids_right == [3, 4]
+
+
 def test_match_fuzzy_with_blocking_key():
     """match_fuzzy with blocking_key finds matches only within blocks."""
     left = pl.DataFrame({

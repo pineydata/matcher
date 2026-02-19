@@ -15,6 +15,7 @@ Key Concepts:
   rule can match (OR logic).
 - Blocking: Optional blocking_key (e.g. "zip_code") restricts candidate pairs to
   records that share the same blocking key value, reducing comparisons and memory.
+  On match(), blocking_key can be a list (one per rule) for different blocking per rule.
   Supported on match() and match_fuzzy().
 - Fuzzy Matching: match_fuzzy() uses Jaro-Winkler similarity (via rapidfuzz) for
   typo-tolerant matching on a single string field, with a configurable threshold.
@@ -42,7 +43,7 @@ Dependencies:
 
 import polars as pl
 from polars import DataFrame
-from typing import Union, Optional, TYPE_CHECKING
+from typing import Union, Optional, List, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from matcher.results import MatchResults
@@ -109,7 +110,7 @@ class Matcher:
     def match(
         self,
         rules: Union[str, list[str], list[Union[str, list[str]]]],
-        blocking_key: Optional[str] = None
+        blocking_key: Optional[Union[str, List[Optional[str]]]] = None
     ) -> "MatchResults":
         """Perform matching using the configured matching algorithm with sequential rule processing.
 
@@ -126,10 +127,12 @@ class Matcher:
 
                   Records match if ANY rule matches (OR logic).
                   Within a rule, all fields must match together (AND logic).
-            blocking_key: Optional column name. When set, only records with the same value
-                          in this column are compared (e.g. "zip_code"). Reduces comparisons
-                          and memory; same matches as without blocking when blocks partition
-                          the data sensibly.
+            blocking_key: Optional. When set, only records with the same value in the blocking
+                          column(s) are compared. Can be:
+                          - str: one column name used for all rules (e.g. "zip_code").
+                          - list of str or None: one entry per rule; blocking_key[i] is the
+                            column for rule i, or None for no blocking on that rule. Length
+                            must match the number of rules.
 
         Returns:
             MatchResults object with matches
@@ -144,6 +147,9 @@ class Matcher:
             ...     "email",
             ...     ["first_name", "last_name"]
             ... ])
+            >>> # Different blocking per rule: email within zip, name within state
+            >>> results = matcher.match(rules=["email", ["first_name", "last_name"]],
+            ...                        blocking_key=["zip_code", "state"])
         """
         # Normalize rules to list of lists
         normalized_rules = self._normalize_rules(rules)
@@ -151,20 +157,37 @@ class Matcher:
         # Validate all fields exist (including blocking_key if provided)
         self._validate_fields(self.left, self.right, normalized_rules)
         if blocking_key is not None:
-            self._validate_fields(
-                self.left, self.right, [[blocking_key]]
-            )
+            if isinstance(blocking_key, str):
+                self._validate_fields(
+                    self.left, self.right, [[blocking_key]]
+                )
+            else:
+                if len(blocking_key) != len(normalized_rules):
+                    raise ValueError(
+                        f"blocking_key list length ({len(blocking_key)}) must equal "
+                        f"number of rules ({len(normalized_rules)})"
+                    )
+                unique_keys = {k for k in blocking_key if k is not None}
+                for key in unique_keys:
+                    self._validate_fields(
+                        self.left, self.right, [[key]]
+                    )
 
-        # Resolve (left, right) pairs to run: either one full pair or per-block pairs
-        if blocking_key is None:
-            blocks_to_run = [(self.left, self.right)]
-        else:
-            blocks_to_run = self._block_pairs(blocking_key)
-
-        # Process rules sequentially within each block (Polars parallelizes joins internally)
+        # Process each rule (with its own blocks when blocking_key is per-rule)
         all_matches = []
-        for left_block, right_block in blocks_to_run:
-            for rule in normalized_rules:
+        for i, rule in enumerate(normalized_rules):
+            if blocking_key is None:
+                blocks_for_rule = [(self.left, self.right)]
+            elif isinstance(blocking_key, str):
+                blocks_for_rule = self._block_pairs(blocking_key)
+            else:
+                bk = blocking_key[i]
+                blocks_for_rule = (
+                    [(self.left, self.right)]
+                    if bk is None
+                    else self._block_pairs(bk)
+                )
+            for left_block, right_block in blocks_for_rule:
                 rule_matches = self.matching_algorithm.match(
                     left_block, right_block, rule, self.left_id, self.right_id
                 )

@@ -1,4 +1,4 @@
-# hygge-match Roadmap
+# matcher Roadmap
 
 **Last Updated:** 2026
 **Current Phase:** Phase 1, Phase 3 & Phase 4 Complete ✅
