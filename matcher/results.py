@@ -210,8 +210,7 @@ class MatchResults:
             # Extract matched left IDs
             matched_left_ids = self.matches.select(left_id).unique()
         else:
-            # Fallback: if no right_id_right, assume all columns represent matches
-            # This shouldn't happen with proper matching, but handle gracefully
+            # Matches must have left_id and right_id_right; fail fast with clear message
             raise ValueError(
                 f"Cannot refine: matches don't have expected structure. "
                 f"Expected '{left_id}' and '{right_id_right}' columns."
