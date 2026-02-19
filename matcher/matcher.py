@@ -13,6 +13,9 @@ Key Concepts:
   - Multiple rules: ["email", ["first_name", "last_name"]] (match if ANY rule matches)
 - Rule Logic: Within a rule, all fields must match (AND logic). Across rules, any
   rule can match (OR logic).
+- Blocking: Optional blocking_key (e.g. "zip_code") restricts candidate pairs to
+  records that share the same blocking key value, reducing comparisons and memory.
+  Supported on match() and match_fuzzy().
 - Fuzzy Matching: match_fuzzy() uses Jaro-Winkler similarity (via rapidfuzz) for
   typo-tolerant matching on a single string field, with a configurable threshold.
 
@@ -26,7 +29,8 @@ Usage Pattern:
     >>> matcher = Matcher(left=left_df, right=right_df, left_id="id", right_id="id")
     >>> results = matcher.match(rules="email")
     >>> print(f"Found {results.count} matches")
-    >>>
+    >>> # With blocking for large datasets
+    >>> results = matcher.match(rules="email", blocking_key="zip_code")
     >>> # Fuzzy matching for names with typos
     >>> fuzzy_results = matcher.match_fuzzy(field="name", threshold=0.85)
 
@@ -104,11 +108,14 @@ class Matcher:
 
     def match(
         self,
-        rules: Union[str, list[str], list[Union[str, list[str]]]]
+        rules: Union[str, list[str], list[Union[str, list[str]]]],
+        blocking_key: Optional[str] = None
     ) -> "MatchResults":
         """Perform matching using the configured matching algorithm with sequential rule processing.
 
         Rules are processed sequentially and combined with OR logic.
+        Optional blocking restricts candidate pairs to records that share the same blocking_key
+        value (e.g. zip_code), reducing comparisons and memory for large datasets.
 
         Args:
             rules: Matching rule(s). Can be:
@@ -119,6 +126,10 @@ class Matcher:
 
                   Records match if ANY rule matches (OR logic).
                   Within a rule, all fields must match together (AND logic).
+            blocking_key: Optional column name. When set, only records with the same value
+                          in this column are compared (e.g. "zip_code"). Reduces comparisons
+                          and memory; same matches as without blocking when blocks partition
+                          the data sensibly.
 
         Returns:
             MatchResults object with matches
@@ -126,10 +137,8 @@ class Matcher:
         Examples:
             >>> # Single field
             >>> results = matcher.match(rules="email")
-            >>> # Single rule, single field
-            >>> results = matcher.match(rules=["email"])
-            >>> # Single rule, multiple fields
-            >>> results = matcher.match(rules=["email", "zip_code"])
+            >>> # With blocking for performance
+            >>> results = matcher.match(rules="email", blocking_key="zip_code")
             >>> # Multiple rules: match if email OR (first_name AND last_name)
             >>> results = matcher.match(rules=[
             ...     "email",
@@ -139,30 +148,85 @@ class Matcher:
         # Normalize rules to list of lists
         normalized_rules = self._normalize_rules(rules)
 
-        # Validate all fields exist
+        # Validate all fields exist (including blocking_key if provided)
         self._validate_fields(self.left, self.right, normalized_rules)
-
-        # Process rules sequentially (Polars parallelizes joins internally)
-        all_matches = []
-        for rule in normalized_rules:
-            rule_matches = self.matching_algorithm.match(
-                self.left, self.right, rule, self.left_id, self.right_id
+        if blocking_key is not None:
+            self._validate_fields(
+                self.left, self.right, [[blocking_key]]
             )
-            all_matches.append(rule_matches)
+
+        # Resolve (left, right) pairs to run: either one full pair or per-block pairs
+        if blocking_key is None:
+            blocks_to_run = [(self.left, self.right)]
+        else:
+            blocks_to_run = self._block_pairs(blocking_key)
+
+        # Process rules sequentially within each block (Polars parallelizes joins internally)
+        all_matches = []
+        for left_block, right_block in blocks_to_run:
+            for rule in normalized_rules:
+                rule_matches = self.matching_algorithm.match(
+                    left_block, right_block, rule, self.left_id, self.right_id
+                )
+                all_matches.append(rule_matches)
 
         # Import here to avoid circular dependency
         from matcher.results import MatchResults
 
         if not all_matches:
-            # No matches - return empty DataFrame with same schema
-            first_col = self.left.columns[0] if self.left.columns else self.left_id
-            empty_result = self.left.join(self.right, on=first_col, how="inner").filter(pl.lit(False))
+            # Empty result with same schema as non-empty: need a column present in both
+            if self.left_id == self.right_id and self.left_id in self.right.columns:
+                join_col = self.left_id
+            else:
+                join_col = self.left.columns[0] if self.left.columns else self.left_id
+                if join_col not in self.right.columns:
+                    raise ValueError(
+                        f"Cannot build empty result: left column '{join_col}' not in right. "
+                        f"Right columns: {list(self.right.columns)}"
+                    )
+            empty_result = self.left.join(self.right, on=join_col, how="inner").filter(pl.lit(False))
             return MatchResults(empty_result, original_left=self.left)
 
         # Combine results (OR logic)
         final_result = self._combine_matches(self.left, self.right, all_matches)
 
         return MatchResults(final_result, original_left=self.left)
+
+    def _paired_blocks_by_key(
+        self,
+        left_df: DataFrame,
+        right_df: DataFrame,
+        blocking_key: str,
+    ) -> list[tuple[DataFrame, DataFrame]]:
+        """Return (left_block, right_block) pairs for each common blocking key value.
+
+        Nulls in the blocking key form one block. Used by both exact and fuzzy matching.
+        """
+        left_vals = left_df.select(blocking_key).unique()
+        right_vals = right_df.select(blocking_key).unique()
+        common = left_vals.join(right_vals, on=blocking_key, how="inner")
+        block_values = common.to_series().to_list()
+
+        # Inner join excludes nulls; add null block when both sides have nulls
+        left_has_nulls = left_df.select(pl.col(blocking_key).is_null().any()).item()
+        right_has_nulls = right_df.select(pl.col(blocking_key).is_null().any()).item()
+        if left_has_nulls and right_has_nulls:
+            block_values.append(None)
+
+        pairs = []
+        for block_val in block_values:
+            if block_val is None:
+                left_b = left_df.filter(pl.col(blocking_key).is_null())
+                right_b = right_df.filter(pl.col(blocking_key).is_null())
+            else:
+                left_b = left_df.filter(pl.col(blocking_key) == block_val)
+                right_b = right_df.filter(pl.col(blocking_key) == block_val)
+            pairs.append((left_b, right_b))
+        return pairs
+
+    def _block_pairs(self, blocking_key: str) -> list[tuple[DataFrame, DataFrame]]:
+        """Return list of (left_block, right_block) for each common blocking key value."""
+        return self._paired_blocks_by_key(self.left, self.right, blocking_key)
 
     def _normalize_rules(self, rules: Union[str, list[str], list[Union[str, list[str]]]]) -> list[list[str]]:
         """Normalize rules input to list of lists."""
@@ -310,17 +374,23 @@ class Matcher:
     def match_fuzzy(
         self,
         field: str,
-        threshold: float = 0.85
+        threshold: float = 0.85,
+        blocking_key: Optional[str] = None
     ) -> "MatchResults":
         """Fuzzy matching on a single string field using Jaro-Winkler similarity.
 
         Uses batch vectorized similarity (rapidfuzz.process.cdist) with Polars → Arrow
         → rapidfuzz data flow. Rows where the field is null are excluded from
         matching (same as exact match: nulls do not match).
+        Optional blocking runs fuzzy only within blocks (same blocking_key value),
+        reducing matrix size and memory for large datasets.
 
         Args:
             field: Single column name to match on (string values).
             threshold: Minimum similarity in [0, 1] to count as a match (default 0.85).
+            blocking_key: Optional column name. When set, only records with the same
+                          value in this column are compared; similarity matrix is built
+                          per block to bound memory.
 
         Returns:
             MatchResults with matches including a 'confidence' column (0–1).
@@ -330,8 +400,7 @@ class Matcher:
 
         Example:
             >>> results = matcher.match_fuzzy(field="name", threshold=0.85)
-            >>> print(f"Found {results.count} matches")
-            >>> results.matches.filter(pl.col("confidence") >= 0.9)
+            >>> results = matcher.match_fuzzy(field="name", blocking_key="zip_code")
         """
         if not 0 <= threshold <= 1:
             raise ValueError(f"threshold must be between 0 and 1, got {threshold}")
@@ -343,6 +412,15 @@ class Matcher:
             raise ValueError(
                 f"Field '{field}' not found in right source. Available: {self.right.columns}"
             )
+        if blocking_key is not None:
+            if blocking_key not in self.left.columns:
+                raise ValueError(
+                    f"blocking_key '{blocking_key}' not found in left source. Available: {self.left.columns}"
+                )
+            if blocking_key not in self.right.columns:
+                raise ValueError(
+                    f"blocking_key '{blocking_key}' not found in right source. Available: {self.right.columns}"
+                )
 
         # Fuzzy matching requires string columns (we use .str.to_lowercase() etc.)
         left_dtype = self.left.schema[field]
@@ -362,46 +440,26 @@ class Matcher:
         if left_valid.height == 0 or right_valid.height == 0:
             return self._empty_fuzzy_result()
 
-        # Normalize: lowercase and strip (columnar in Polars)
-        left_norm = left_valid.with_columns(
-            pl.col(field).str.to_lowercase().str.strip_chars().alias("_fuzzy_val")
-        )
-        right_norm = right_valid.with_columns(
-            pl.col(field).str.to_lowercase().str.strip_chars().alias("_fuzzy_val")
-        )
+        # Resolve (left_block, right_block) pairs: one full pair or per-block
+        if blocking_key is None:
+            block_pairs = [(left_valid, right_valid)]
+        else:
+            block_pairs = self._fuzzy_block_pairs(left_valid, right_valid, blocking_key)
 
-        # Polars → Arrow → list of strings (bridge per PHASE3_FUZZY_IMPLEMENTATION)
-        left_arrow = left_norm.select("_fuzzy_val").to_arrow()
-        right_arrow = right_norm.select("_fuzzy_val").to_arrow()
-        left_strings = left_arrow.column("_fuzzy_val").to_pylist()
-        right_strings = right_arrow.column("_fuzzy_val").to_pylist()
+        all_pairs = []
+        for left_block, right_block in block_pairs:
+            if left_block.height == 0 or right_block.height == 0:
+                continue
+            pairs_df = self._fuzzy_pairs_for_blocks(
+                left_block, right_block, field, threshold
+            )
+            if pairs_df is not None and pairs_df.height > 0:
+                all_pairs.append(pairs_df)
 
-        # Batch similarity matrix via rapidfuzz (C-level, workers=-1)
-        from rapidfuzz import process
-        from rapidfuzz.distance import JaroWinkler
-        matrix = process.cdist(
-            left_strings,
-            right_strings,
-            scorer=JaroWinkler.similarity,
-            workers=-1,
-            score_cutoff=threshold,
-        )
-
-        # Pairs (i, j) where matrix[i, j] >= threshold
-        # Use _right_id_val in pairs to avoid duplicate column names when left_id == right_id
-        import numpy as np
-        rows, cols = np.where(matrix >= threshold)
-        if len(rows) == 0:
+        if not all_pairs:
             return self._empty_fuzzy_result()
 
-        left_id_list = left_valid.select(self.left_id).to_series().to_list()
-        right_id_list = right_valid.select(self.right_id).to_series().to_list()
-        pairs_data = {
-            self.left_id: [left_id_list[int(r)] for r in rows],
-            "_right_id_val": [right_id_list[int(c)] for c in cols],
-            "confidence": matrix[rows, cols].astype(float).tolist(),
-        }
-        pairs = pl.DataFrame(pairs_data)
+        pairs = pl.concat(all_pairs).unique(subset=[self.left_id, "_right_id_val"], keep="first")
 
         # Rejoin with full left/right to get same shape as match() and add confidence
         right_id_right = f"{self.right_id}_right"
@@ -422,3 +480,55 @@ class Matcher:
 
         from matcher.results import MatchResults
         return MatchResults(result, original_left=self.left)
+
+    def _fuzzy_block_pairs(
+        self,
+        left_valid: DataFrame,
+        right_valid: DataFrame,
+        blocking_key: str
+    ) -> list[tuple[DataFrame, DataFrame]]:
+        """Return list of (left_block, right_block) for each common blocking key value."""
+        return self._paired_blocks_by_key(left_valid, right_valid, blocking_key)
+
+    def _fuzzy_pairs_for_blocks(
+        self,
+        left_block: DataFrame,
+        right_block: DataFrame,
+        field: str,
+        threshold: float
+    ) -> Optional[DataFrame]:
+        """Run fuzzy similarity on one block; return DataFrame (left_id, _right_id_val, confidence) or None."""
+        left_norm = left_block.with_columns(
+            pl.col(field).str.to_lowercase().str.strip_chars().alias("_fuzzy_val")
+        )
+        right_norm = right_block.with_columns(
+            pl.col(field).str.to_lowercase().str.strip_chars().alias("_fuzzy_val")
+        )
+        left_arrow = left_norm.select("_fuzzy_val").to_arrow()
+        right_arrow = right_norm.select("_fuzzy_val").to_arrow()
+        left_strings = left_arrow.column("_fuzzy_val").to_pylist()
+        right_strings = right_arrow.column("_fuzzy_val").to_pylist()
+
+        from rapidfuzz import process
+        from rapidfuzz.distance import JaroWinkler
+        import numpy as np
+
+        matrix = process.cdist(
+            left_strings,
+            right_strings,
+            scorer=JaroWinkler.similarity,
+            workers=-1,
+            score_cutoff=threshold,
+        )
+        rows, cols = np.where(matrix >= threshold)
+        if len(rows) == 0:
+            return None
+
+        left_id_list = left_block.select(self.left_id).to_series().to_list()
+        right_id_list = right_block.select(self.right_id).to_series().to_list()
+        pairs_data = {
+            self.left_id: [left_id_list[int(r)] for r in rows],
+            "_right_id_val": [right_id_list[int(c)] for c in cols],
+            "confidence": matrix[rows, cols].astype(float).tolist(),
+        }
+        return pl.DataFrame(pairs_data)

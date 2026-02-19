@@ -419,3 +419,137 @@ def test_deduplicator_match_fuzzy():
     assert id_right in results.matches.columns
     self_matches = results.matches.filter(pl.col("id") == pl.col(id_right))
     assert len(self_matches) == 0
+
+
+# --- Blocking (Phase 2) ---
+
+
+def test_match_with_blocking_key_same_results():
+    """With blocking_key, same matches found when blocks align with match keys."""
+    left = pl.DataFrame({
+        "id": [1, 2],
+        "email": ["a@test.com", "b@test.com"],
+        "zip_code": ["10001", "10002"],
+    })
+    right = pl.DataFrame({
+        "id": [3, 4],
+        "email": ["a@test.com", "c@test.com"],
+        "zip_code": ["10001", "10002"],
+    })
+    matcher = Matcher(left=left, right=right, left_id="id", right_id="id")
+    without = matcher.match(rules="email")
+    with_blocking = matcher.match(rules="email", blocking_key="zip_code")
+    assert without.count == with_blocking.count == 1
+    assert without.matches["id"].to_list() == with_blocking.matches["id"].to_list()
+    assert without.matches["id_right"].to_list() == with_blocking.matches["id_right"].to_list()
+
+
+def test_match_with_blocking_key_no_common_blocks():
+    """When left and right share no blocking key value, no matches."""
+    left = pl.DataFrame({
+        "id": [1, 2],
+        "email": ["a@test.com", "b@test.com"],
+        "zip_code": ["10001", "10002"],
+    })
+    right = pl.DataFrame({
+        "id": [3, 4],
+        "email": ["a@test.com", "b@test.com"],
+        "zip_code": ["20001", "20002"],
+    })
+    matcher = Matcher(left=left, right=right, left_id="id", right_id="id")
+    results = matcher.match(rules="email", blocking_key="zip_code")
+    assert results.count == 0
+
+
+def test_match_blocking_key_missing_raises():
+    """blocking_key column must exist in both left and right."""
+    left = pl.DataFrame({"id": [1], "email": ["a@test.com"], "zip_code": ["1"]})
+    right = pl.DataFrame({"id": [2], "email": ["a@test.com"]})  # no zip_code
+    matcher = Matcher(left=left, right=right, left_id="id", right_id="id")
+    with pytest.raises(ValueError, match="not found in right source"):
+        matcher.match(rules="email", blocking_key="zip_code")
+
+
+def test_match_blocking_key_nulls_form_one_block():
+    """Nulls in blocking_key form one block; matches found within that block."""
+    left = pl.DataFrame({
+        "id": [1, 2],
+        "email": ["a@test.com", "b@test.com"],
+        "zip_code": [None, "10002"],
+    })
+    right = pl.DataFrame({
+        "id": [3, 4],
+        "email": ["a@test.com", "c@test.com"],
+        "zip_code": [None, "10002"],
+    })
+    matcher = Matcher(left=left, right=right, left_id="id", right_id="id")
+    results = matcher.match(rules="email", blocking_key="zip_code")
+    # Null block: (1,3) match on email. 10002 block: (2,4) no email match.
+    assert results.count == 1
+    assert results.matches["id"].to_list() == [1]
+    assert results.matches["id_right"].to_list() == [3]
+
+
+def test_match_fuzzy_with_blocking_key():
+    """match_fuzzy with blocking_key finds matches only within blocks."""
+    left = pl.DataFrame({
+        "id": [1, 2],
+        "name": ["Alice Smith", "Bob Jones"],
+        "zip_code": ["10001", "10002"],
+    })
+    right = pl.DataFrame({
+        "id": [3, 4, 5],
+        "name": ["Alicia Smith", "Bob Jons", "Charlie Brown"],
+        "zip_code": ["10001", "10002", "10002"],
+    })
+    matcher = Matcher(left=left, right=right, left_id="id", right_id="id")
+    results = matcher.match_fuzzy(field="name", threshold=0.80, blocking_key="zip_code")
+    # (1,3) same block 10001; (2,4) and (2,5) same block 10002. No cross-block pairs.
+    assert results.count >= 1
+    assert "confidence" in results.matches.columns
+    # All matches must share zip_code
+    for row in results.matches.iter_rows(named=True):
+        assert row["zip_code"] == row["zip_code_right"]
+
+
+def test_match_fuzzy_blocking_same_as_no_blocking_when_one_block():
+    """Fuzzy with one block gives same count as no blocking (sanity check)."""
+    left = pl.DataFrame({"id": [1], "name": ["Alice"], "z": ["same"]})
+    right = pl.DataFrame({"id": [2], "name": ["Alicia"], "z": ["same"]})
+    matcher = Matcher(left=left, right=right, left_id="id", right_id="id")
+    no_block = matcher.match_fuzzy(field="name", threshold=0.5)
+    with_block = matcher.match_fuzzy(field="name", threshold=0.5, blocking_key="z")
+    assert no_block.count == with_block.count
+
+
+def test_deduplicator_match_with_blocking_key():
+    """Deduplicator.match with blocking_key delegates and filters self-matches."""
+    df = pl.DataFrame({
+        "id": [1, 2, 3, 4],
+        "email": ["a@test.com", "a@test.com", "b@test.com", "c@test.com"],
+        "zip_code": ["10001", "10001", "10002", "10002"],
+    })
+    deduplicator = Deduplicator(source=df, id_col="id")
+    results = deduplicator.match(rules="email", blocking_key="zip_code")
+    # Duplicates: (1,2) and (2,1) in block 10001; only one pair after self-filter
+    assert results.count >= 1
+    id_right = "id_right"
+    self_matches = results.matches.filter(pl.col("id") == pl.col(id_right))
+    assert len(self_matches) == 0
+
+
+def test_deduplicator_match_fuzzy_with_blocking_key():
+    """Deduplicator.match_fuzzy with blocking_key works and filters self-matches."""
+    df = pl.DataFrame({
+        "id": [1, 2, 3],
+        "name": ["Alice Smith", "Alicia Smith", "Bob Jones"],
+        "zip_code": ["10001", "10001", "10002"],
+    })
+    deduplicator = Deduplicator(source=df, id_col="id")
+    results = deduplicator.match_fuzzy(
+        field="name", threshold=0.80, blocking_key="zip_code"
+    )
+    assert results.count >= 1
+    assert "confidence" in results.matches.columns
+    self_matches = results.matches.filter(pl.col("id") == pl.col("id_right"))
+    assert len(self_matches) == 0

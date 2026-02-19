@@ -1,48 +1,51 @@
 ---
-title: PR Summary - Phase 4: Human in the Loop, Evaluation Workflow & Threshold Tuning
-tags: [enhancement, feature, documentation]
+title: PR Summary - Phase 2 Blocking (optional blocking_key)
+tags: [enhancement, feature]
 ---
 
 ## Overview
 
-- **Phase 4 complete**: Export matches for human review (CSV + optional sample) and a documented improvement loop so users can improve matching over time.
-- **evaluate(ground_truth)** takes a **DataFrame** only (you load CSV/Parquet); API stays "you load data, matcher operates on it."
-- **find_best_threshold()** sweeps confidence thresholds on fuzzy results and returns the threshold that maximizes F1, plus a curve for plotting—data-driven tuning instead of guessing.
-- **PR feedback addressed**: Docs aligned to DataFrame-only API; evaluator right-id resolution when left/right id share the same name; fail-fast validation for `sample()` (n, fraction) and `find_best_threshold(thresholds)`.
+- **Optional blocking** on `match()` and `match_fuzzy()` for Matcher and Deduplicator: pass `blocking_key="zip_code"` (or any column) to restrict candidate pairs to rows that share the same value, reducing comparisons and memory on large datasets.
+- **Exact match**: blocks are derived from common values of the blocking key; matching runs per block then results are combined (same matches as no blocking when blocks align).
+- **Fuzzy match**: similarity matrix is built per block so memory stays bounded; pairs are merged and deduplicated across blocks.
+- **Backward compatible**: all new parameters are optional; existing call sites unchanged.
 
 ## Key Changes
 
-### Export for review & evaluation (Phase 4)
+### Matcher (blocking)
 
-- `matcher/results.py`:
-  - **export_for_review(path)** writes CSV for Excel or any tool; **sample(n=..., fraction=..., seed=...)** for a manageable review sample.
-  - **evaluate(ground_truth)** accepts a DataFrame only; docstring notes loading from file in user code.
-  - **sample()** validates `n >= 0` and `0 < fraction <= 1`; clear ValueError for invalid inputs.
+- `matcher/matcher.py`:
+  - `match(rules, blocking_key=None)`: when `blocking_key` is set, iterates over common block values, runs algorithm per block, combines with existing OR logic.
+  - `match_fuzzy(field, threshold, blocking_key=None)`: when set, runs fuzzy pipeline per block via `_fuzzy_block_pairs()` and `_fuzzy_pairs_for_blocks()`, then concat + unique + single rejoin.
+  - `_block_pairs()` and `_fuzzy_block_pairs()`: nulls in blocking key form one block (filter by `is_null()`). Block key must exist in both left and right (validated with existing `_validate_fields()` for blocking_key).
 
-### Evaluation & threshold tuning
+### Deduplicator (pass-through)
 
-- `matcher/evaluators.py`:
-  - **find_best_threshold(matches, ground_truth, ...)** for fuzzy results with a `confidence` column; returns best_threshold, best_f1, best_precision, best_recall, curve. Validates custom **thresholds**: non-empty, numeric, in [0, 1]; raises clear errors instead of returning None.
-  - **SimpleEvaluator**: When `right_id_col == left_id_col` and a suffixed column (e.g. `id_right`) exists, use the suffixed column so entity-resolution results with default `id` resolve correctly.
-- `matcher/__init__.py`: **find_best_threshold** exported.
+- `matcher/deduplicator.py`:
+  - `match(rules, blocking_key=None)` and `match_fuzzy(field, threshold, blocking_key=None)` accept `blocking_key` and pass it to the internal Matcher; self-match filtering unchanged.
 
 ### Documentation
 
-- **README.md**: Ground truth as DataFrame only (load with `pl.read_csv`/`pl.read_parquet`); improvement loop step 3 notes `right_id_col="id_right"` for both deduplication and entity resolution when left/right id share the same name.
-- **ROADMAP.md**: Phase 4 success criteria, metrics, timeline, and next steps updated to "load ground truth from CSV/Parquet and pass DataFrame to evaluate()" (no path support).
-- **PR_REVIEW.md**: Summary and strengths updated to reflect DataFrame-only evaluate() API.
+- `ROADMAP.md`: Phase 2 marked complete; API and success criteria updated.
+- `matcher/matcher.py`, `matcher/deduplicator.py`: module and method docstrings updated for blocking.
+- `README.md`, `CLAUDE.md`: one-line mention and common-pattern example for `blocking_key`.
 
 ### Tests
 
-- `tests/test_core.py`: export_for_review, sample (n, fraction, validation, empty, **n negative**, **fraction out of range**).
-- `tests/test_evaluation.py`: evaluate with DataFrame (CSV/Parquet load); find_best_threshold (structure, curve, **empty thresholds**, **invalid threshold value**); **ground_truth_30_pairs** fixture for DRY.
-- `tests/test_with_sample_data.py`: entity resolution and deduplication with evaluate() and known ground truth.
+- `tests/test_core.py`:
+  - Blocking: same results with/without blocking when blocks align; no matches when no common blocks; missing `blocking_key` column raises; fuzzy blocking keeps matches within same block; one-block fuzzy equals no-block count; Deduplicator blocking and fuzzy blocking (self-matches filtered). Seven new tests.
+
+### Refactor (post-review)
+
+- `matcher/matcher.py`:
+  - **DRY**: Shared block-pair logic extracted into `_paired_blocks_by_key()`; `_block_pairs()` and `_fuzzy_block_pairs()` delegate to it.
+  - **Empty-result path**: When there are no matches, join key is explicit (use `left_id` when same in both frames, else require first left column in right) and raises a clear `ValueError` if the column is missing in right instead of relying on an implicit assumption.
 
 ## Testing
 
-- All tests passing: `pytest` (72 tests).
-- Coverage: export-for-review, sample() (including validation), evaluate(DataFrame), find_best_threshold (sweep + confidence error + threshold validation), sample-data evaluation.
+- All tests passing: `pytest` (79 tests).
+- New coverage: exact and fuzzy blocking for Matcher and Deduplicator, validation and edge cases (no common blocks, one block).
 
 ---
 
-**PR labels**: Add `enhancement` or `feature` and `documentation` on GitHub so release notes group this under new features and docs.
+**Principles**: KISS (single blocking key, no auto-suggestions), YAGNI (no multiple blocking keys), backward compatible, library-first (optional arg, notebook-friendly). **Reminder:** Add GitHub label `enhancement` or `feature` to this PR for release notes.

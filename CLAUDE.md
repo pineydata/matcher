@@ -239,6 +239,8 @@ deduplicator = Deduplicator(
 ```python
 # Exact matching (works for both Matcher and Deduplicator)
 results = matcher.match(rules="email")
+# With blocking for performance (optional)
+results = matcher.match(rules="email", blocking_key="zip_code")
 # Or multiple rules
 results = matcher.match(rules=["email", ["first_name", "last_name"]])
 
