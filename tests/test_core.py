@@ -470,6 +470,26 @@ def test_match_blocking_key_missing_raises():
         matcher.match(rules="email", blocking_key="zip_code")
 
 
+def test_match_blocking_key_nulls_form_one_block():
+    """Nulls in blocking_key form one block; matches found within that block."""
+    left = pl.DataFrame({
+        "id": [1, 2],
+        "email": ["a@test.com", "b@test.com"],
+        "zip_code": [None, "10002"],
+    })
+    right = pl.DataFrame({
+        "id": [3, 4],
+        "email": ["a@test.com", "c@test.com"],
+        "zip_code": [None, "10002"],
+    })
+    matcher = Matcher(left=left, right=right, left_id="id", right_id="id")
+    results = matcher.match(rules="email", blocking_key="zip_code")
+    # Null block: (1,3) match on email. 10002 block: (2,4) no email match.
+    assert results.count == 1
+    assert results.matches["id"].to_list() == [1]
+    assert results.matches["id_right"].to_list() == [3]
+
+
 def test_match_fuzzy_with_blocking_key():
     """match_fuzzy with blocking_key finds matches only within blocks."""
     left = pl.DataFrame({

@@ -207,6 +207,12 @@ class Matcher:
         common = left_vals.join(right_vals, on=blocking_key, how="inner")
         block_values = common.to_series().to_list()
 
+        # Inner join excludes nulls; add null block when both sides have nulls
+        left_has_nulls = left_df.select(pl.col(blocking_key).is_null().any()).item()
+        right_has_nulls = right_df.select(pl.col(blocking_key).is_null().any()).item()
+        if left_has_nulls and right_has_nulls:
+            block_values.append(None)
+
         pairs = []
         for block_val in block_values:
             if block_val is None:
