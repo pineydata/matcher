@@ -239,14 +239,33 @@ class MatchResults:
             right_id=right_id
         )
 
-        # Combine with existing matches
+        # Combine by (left_id, right_id_right) then rejoin to get consistent schema
+        # (algorithm may return different columns for different rules, e.g. multi-field join)
         if new_matches.height > 0:
-            combined = pl.concat([self.matches, new_matches])
-            # Deduplicate on id columns if they exist, otherwise on all columns
-            if left_id in combined.columns and right_id_right in combined.columns:
-                combined = combined.unique(subset=[left_id, right_id_right])
-            else:
-                combined = combined.unique()
+            existing_pairs = self.matches.select([
+                pl.col(left_id).alias("_lid"),
+                pl.col(right_id_right).alias("_rid"),
+            ]).unique()
+            new_pairs = new_matches.select([
+                pl.col(left_id).alias("_lid"),
+                pl.col(right_id_right).alias("_rid"),
+            ]).unique()
+            combined_pairs = pl.concat([existing_pairs, new_pairs]).unique()
+            right_with_suffix = right_source.with_columns(
+                pl.col(right_id).alias(right_id_right)
+            )
+            combined = actual_matcher.left.join(
+                combined_pairs, left_on=left_id, right_on="_lid", how="inner"
+            ).join(
+                right_with_suffix,
+                left_on="_rid",
+                right_on=right_id,
+                how="inner",
+                suffix="_right",
+            )
+            to_drop = [c for c in ["_lid", "_rid"] if c in combined.columns]
+            if to_drop:
+                combined = combined.drop(to_drop)
         else:
             combined = self.matches
 

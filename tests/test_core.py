@@ -298,6 +298,102 @@ def test_match_rules_string_single_field():
     assert results.count >= 1
 
 
+# --- Refine (cascading match) ---
+
+
+def test_refine_entity_resolution_adds_name_matches():
+    """Refine: match on email first, then on name for unmatched left; combined count and IDs."""
+    left = pl.DataFrame({
+        "id": [1, 2, 3],
+        "email": ["a@test.com", "nomatch@test.com", "nomatch2@test.com"],
+        "first_name": ["Alice", "Bob", "Charlie"],
+        "last_name": ["Smith", "Jones", "Brown"],
+    })
+    right = pl.DataFrame({
+        "id": [10, 20, 30],
+        "email": ["a@test.com", "b@test.com", "c@test.com"],
+        "first_name": ["Alice", "Bob", "Xavier"],
+        "last_name": ["Smith", "Jones", "Y"],
+    })
+    matcher = Matcher(left=left, right=right, left_id="id", right_id="id")
+    results = matcher.match(rules="email")
+    # Only (1, 10) match on email
+    assert results.count == 1
+    assert results.matches["id"].to_list() == [1]
+
+    refined = results.refine(matcher, rule=["first_name", "last_name"])
+    # Original (1, 10) + refined: (2, 20) on name Bob Jones. Left id=3 has no name match.
+    assert refined.count == 2
+    left_ids = refined.matches["id"].to_list()
+    right_ids = refined.matches["id_right"].to_list()
+    assert 1 in left_ids and 2 in left_ids
+    assert 10 in right_ids and 20 in right_ids
+    # Unmatched left (id=3) got no new match
+    assert 3 not in left_ids
+
+
+def test_refine_deduplication_no_self_matches():
+    """Refine with Deduplicator: combined result has no self-matches (id == id_right)."""
+    df = pl.DataFrame({
+        "id": [1, 2, 3, 4],
+        "email": ["a@test.com", "other@test.com", "other2@test.com", "b@test.com"],
+        "first_name": ["Alice", "Bob", "Bob", "Bob"],
+        "last_name": ["Smith", "Jones", "Jones", "Jones"],
+    })
+    deduplicator = Deduplicator(source=df, id_col="id")
+    results = deduplicator.match(rules="email")
+    # (1,2) or (2,1) if same email - we have only a@ and b@ unique, so maybe 0 dupes on email
+    # Set up so email gives no/some matches, then refine on name gives (2,3), (2,4), (3,4) etc.
+    results = deduplicator.match(rules="email")
+    refined = results.refine(deduplicator, rule=["first_name", "last_name"])
+    id_right = "id_right"
+    assert id_right in refined.matches.columns
+    self_matches = refined.matches.filter(pl.col("id") == pl.col(id_right))
+    assert len(self_matches) == 0
+
+
+def test_refine_all_matched_returns_same():
+    """Refine when no unmatched left records returns same matches unchanged."""
+    left = pl.DataFrame({"id": [1, 2], "email": ["a@test.com", "b@test.com"]})
+    right = pl.DataFrame({"id": [3, 4], "email": ["a@test.com", "b@test.com"]})
+    matcher = Matcher(left=left, right=right, left_id="id", right_id="id")
+    results = matcher.match(rules="email")
+    assert results.count == 2
+
+    refined = results.refine(matcher, rule=["email"])
+    assert refined.count == 2
+    assert refined.matches.height == results.matches.height
+    # Same set of (id, id_right) pairs
+    pairs_orig = set(zip(results.matches["id"].to_list(), results.matches["id_right"].to_list()))
+    pairs_refined = set(zip(refined.matches["id"].to_list(), refined.matches["id_right"].to_list()))
+    assert pairs_refined == pairs_orig
+
+
+def test_refine_raises_when_original_left_missing():
+    """Refine raises when MatchResults was created without original_left."""
+    matches = pl.DataFrame({"id": [1], "id_right": [2], "email": ["a@test.com"]})
+    results = MatchResults(matches, original_left=None)
+    left = pl.DataFrame({"id": [1], "email": ["a@test.com"]})
+    right = pl.DataFrame({"id": [2], "email": ["a@test.com"]})
+    matcher = Matcher(left=left, right=right, left_id="id", right_id="id")
+
+    with pytest.raises(ValueError, match="original left data not available"):
+        results.refine(matcher, rule=["email"])
+
+
+def test_refine_raises_when_matches_lack_id_structure():
+    """Refine raises when matches DataFrame lacks expected left_id or right_id_right."""
+    left = pl.DataFrame({"id": [1, 2], "email": ["a@test.com", "b@test.com"]})
+    right = pl.DataFrame({"id": [3, 4], "email": ["a@test.com", "b@test.com"]})
+    matcher = Matcher(left=left, right=right, left_id="id", right_id="id")
+    # MatchResults with matches that have id but no id_right (malformed)
+    matches_no_right = pl.DataFrame({"id": [1], "email": ["a@test.com"]})
+    results = MatchResults(matches_no_right, original_left=left)
+
+    with pytest.raises(ValueError, match="Expected.*id.*and.*id_right"):
+        results.refine(matcher, rule=["email"])
+
+
 # --- match_fuzzy (Phase 3) ---
 
 
