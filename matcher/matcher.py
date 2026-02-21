@@ -121,8 +121,9 @@ class Matcher:
         looking. For a single rule, runs that rule only.
 
         Optional blocking restricts candidate pairs to records that share the same
-        blocking_key value (e.g. zip_code); when multiple rules are used, blocking
-        applies to the first rule only; subsequent rules run on unmatched x full right.
+        blocking_key value (e.g. zip_code). When blocking_key is a string, blocking
+        applies to all rules; when blocking_key is a list, each rule can have its own
+        blocking key (or None for no blocking on that rule).
 
         Args:
             rules: Matching rule(s). Can be:
@@ -153,7 +154,7 @@ class Matcher:
             ...     "email",
             ...     ["first_name", "last_name"]
             ... ])
-            >>> # Blocking applies to first rule; later rules run on unmatched x full right
+            >>> # Per-rule blocking: email within zip_code, then name within state for unmatched
             >>> results = matcher.match(rules=["email", ["first_name", "last_name"]],
             ...                        blocking_key=["zip_code", "state"])
         """

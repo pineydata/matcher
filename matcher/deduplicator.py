@@ -111,16 +111,28 @@ class Deduplicator:
             >>> results = deduplicator.match(rules="email", blocking_key="zip_code")
             >>> results = deduplicator.match(rules=[["email"], ["name"]], blocking_key=["zip_code", "state"])
         """
-        # Delegate to Matcher
-        results = self._matcher.match(rules, blocking_key=blocking_key)
-
-        # Filter self-matches (id_col == id_col_right)
         id_col_right = f"{self._id_col}_right"
-        filtered_matches = results.matches.filter(
+        normalized = self._matcher._normalize_rules(rules)
+
+        if len(normalized) == 1:
+            results = self._matcher.match(rules=rules, blocking_key=blocking_key)
+            filtered_matches = results.matches.filter(
+                pl.col(self._id_col) != pl.col(id_col_right)
+            )
+            return MatchResults(filtered_matches, original_left=self._matcher.left, source=self)
+
+        # Multi-rule: run first rule, filter self-matches, then cascade refines.
+        # (Matcher would treat left=right as all "matched" on the first rule, so we'd get no refines.)
+        first_bk = blocking_key[0] if isinstance(blocking_key, list) else blocking_key
+        first_results = self._matcher.match(rules=normalized[0], blocking_key=first_bk)
+        filtered_matches = first_results.matches.filter(
             pl.col(self._id_col) != pl.col(id_col_right)
         )
-
-        return MatchResults(filtered_matches, original_left=self._matcher.left, source=self)
+        results = MatchResults(filtered_matches, original_left=self._matcher.left, source=self)
+        for i, rule in enumerate(normalized[1:]):
+            bk = blocking_key[i + 1] if isinstance(blocking_key, list) else blocking_key if blocking_key is not None else None
+            results = results.refine(rule=rule, blocking_key=bk)
+        return results
 
     def match_fuzzy(
         self,
