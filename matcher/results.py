@@ -25,7 +25,7 @@ Usage Pattern:
     >>> filtered = results.pipe(lambda df: df.filter(pl.col("confidence") > 0.9))
     >>>
     >>> # Cascading matching (refine)
-    >>> refined = results.refine(matcher, rule=["first_name", "last_name"])
+    >>> refined = results.refine(rule=["first_name", "last_name"])
     >>>
     >>> # Evaluate against ground truth
     >>> metrics = results.evaluate(ground_truth)
@@ -66,15 +66,22 @@ from matcher.evaluators import SimpleEvaluator
 class MatchResults:
     """Match results with pipe and refine support for chaining operations."""
 
-    def __init__(self, matches: DataFrame, original_left: Optional[DataFrame] = None):
+    def __init__(
+        self,
+        matches: DataFrame,
+        original_left: Optional[DataFrame] = None,
+        source: Optional[Union["Matcher", "Deduplicator"]] = None,
+    ):
         """Initialize with matches DataFrame.
 
         Args:
             matches: Polars DataFrame with match results
             original_left: Original left DataFrame (stored for refine operations)
+            source: Matcher or Deduplicator that produced these results (enables refine(rule=...) without passing matcher)
         """
         self.matches = matches
         self._original_left = original_left
+        self._source = source
 
     @property
     def count(self) -> int:
@@ -97,7 +104,7 @@ class MatchResults:
             >>> results = matcher.match(rule=["email"])
             >>> filtered = results.pipe(lambda df: df.filter(pl.col("confidence") > 0.9))
         """
-        return MatchResults(func(self.matches), self._original_left)
+        return MatchResults(func(self.matches), self._original_left, self._source)
 
     def sample(
         self,
@@ -135,17 +142,18 @@ class MatchResults:
         if fraction is not None and not (0 < fraction <= 1):
             raise ValueError("fraction must be in the range (0, 1].")
         if self.matches.height == 0:
-            return MatchResults(self.matches, self._original_left)
+            return MatchResults(self.matches, self._original_left, self._source)
         if n is not None:
             sampled = self.matches.sample(n=min(n, self.matches.height), seed=seed)
         else:
             sampled = self.matches.sample(fraction=fraction, seed=seed)
-        return MatchResults(sampled, self._original_left)
+        return MatchResults(sampled, self._original_left, self._source)
 
     def refine(
         self,
-        matcher: Union["Matcher", "Deduplicator"],
-        rule: list[str]
+        rule: list[str],
+        matcher: Optional[Union["Matcher", "Deduplicator"]] = None,
+        blocking_key: Optional[str] = None,
     ) -> "MatchResults":
         """Refine matches by applying another rule to unmatched left records (optional).
 
@@ -154,39 +162,60 @@ class MatchResults:
         2. Then match on lower-confidence rule (e.g., name) for unmatched records
         3. Combine all matches
 
+        When results come from matcher.match() or deduplicator.match(), the matcher
+        is stored and you can call refine(rule=[...]) without passing matcher.
+
+        Optional blocking_key restricts this rule to pairs that share the same value
+        in that column (e.g. zip_code), reducing comparisons and memory.
+
         Note: This is one approach to combining matches. For probabilistic matching
         with confidence scores, you may want to use composite confidence scores instead
         of cascading (matching all rules first, then combining with weighted scores).
 
         Args:
-            matcher: Matcher or Deduplicator instance (for access to original data and algorithm)
             rule: Matching rule to apply to unmatched records
+            matcher: Optional. Matcher or Deduplicator (only needed if results were
+                    not from matcher.match() / deduplicator.match(), e.g. hand-built MatchResults)
+            blocking_key: Optional column name. When set, the rule runs only within
+                         blocks (unmatched left and right with the same blocking_key value).
 
         Returns:
             New MatchResults with combined matches (original + refined)
 
         Raises:
-            ValueError: If matches don't have the expected ID column structure
+            ValueError: If matches don't have the expected ID column structure, or
+                        if no matcher is available (not stored and not passed), or
+                        if blocking_key is missing from left or right.
 
         Example:
             >>> # First match on email
-            >>> results = matcher.match(rule=["email"])
+            >>> results = matcher.match(rules="email")
             >>> # Then match on name for records that didn't match on email
-            >>> refined = results.refine(matcher, rule=["first_name", "last_name"])
+            >>> refined = results.refine(rule=["first_name", "last_name"])
+            >>> # With blocking: name match only within same zip_code
+            >>> refined = results.refine(rule=["first_name", "last_name"], blocking_key="zip_code")
         """
         # Import here to avoid circular dependency
         from matcher.deduplicator import Deduplicator
 
+        source = self._source if matcher is None else matcher
+        if source is None:
+            raise ValueError(
+                "refine() requires a matcher. Results from matcher.match() or "
+                "deduplicator.match() have it stored; otherwise pass matcher: "
+                "refine(rule=[...], matcher=matcher)."
+            )
+
         # Get the actual Matcher instance (Deduplicator wraps one)
-        if isinstance(matcher, Deduplicator):
-            actual_matcher = matcher._matcher
-            left_id = matcher._id_col
-            right_id = matcher._id_col
+        if isinstance(source, Deduplicator):
+            actual_matcher = source._matcher
+            left_id = source._id_col
+            right_id = source._id_col
             is_deduplication = True
         else:
-            actual_matcher = matcher
-            left_id = matcher.left_id
-            right_id = matcher.right_id
+            actual_matcher = source
+            left_id = source.left_id
+            right_id = source.right_id
             is_deduplication = False
 
         right_id_right = f"{right_id}_right"
@@ -224,19 +253,42 @@ class MatchResults:
 
         # All records matched - return current matches
         if unmatched_left.height == 0:
-            return MatchResults(self.matches, self._original_left)
+            return MatchResults(self.matches, self._original_left, self._source)
 
         # Get right source (for deduplication, it's a copy of left; for entity resolution, it's the original right)
         right_source = actual_matcher.right
 
-        # Apply new rule to unmatched left + right source
-        new_matches = actual_matcher.matching_algorithm.match(
-            left=unmatched_left,
-            right=right_source,
-            rule=rule,
-            left_id=left_id,
-            right_id=right_id
-        )
+        if blocking_key is not None:
+            if blocking_key not in unmatched_left.columns:
+                raise ValueError(
+                    f"blocking_key '{blocking_key}' not found in (unmatched) left. "
+                    f"Available: {unmatched_left.columns}"
+                )
+            if blocking_key not in right_source.columns:
+                raise ValueError(
+                    f"blocking_key '{blocking_key}' not found in right source. "
+                    f"Available: {right_source.columns}"
+                )
+            blocks = actual_matcher._paired_blocks_by_key(
+                unmatched_left, right_source, blocking_key
+            )
+            block_matches = []
+            for left_block, right_block in blocks:
+                block_result = actual_matcher.matching_algorithm.match(
+                    left_block, right_block, rule, left_id, right_id
+                )
+                block_matches.append(block_result)
+            new_matches = actual_matcher._combine_matches(
+                unmatched_left, right_source, block_matches
+            )
+        else:
+            new_matches = actual_matcher.matching_algorithm.match(
+                left=unmatched_left,
+                right=right_source,
+                rule=rule,
+                left_id=left_id,
+                right_id=right_id
+            )
 
         # Combine by (left_id, right_id_right) then rejoin to get consistent schema
         # (algorithm may return different columns for different rules, e.g. multi-field join)
@@ -275,7 +327,7 @@ class MatchResults:
                     pl.col(left_id) != pl.col(right_id_right)
                 )
 
-        return MatchResults(combined, self._original_left)
+        return MatchResults(combined, self._original_left, self._source)
 
     def evaluate(
         self,

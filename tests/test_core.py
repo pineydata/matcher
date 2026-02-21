@@ -191,7 +191,7 @@ def test_match_multi_field_empty_list():
 
 
 def test_match_rules_entity_resolution():
-    """Test rule-based matching for entity resolution (OR logic)."""
+    """Test rule-based matching for entity resolution (cascading: email then name for unmatched)."""
     left = pl.DataFrame({
         "id": [1, 2, 3],
         "email": ["a@test.com", "b@test.com", "c@test.com"],
@@ -206,7 +206,7 @@ def test_match_rules_entity_resolution():
     })
 
     matcher = Matcher(left=left, right=right, left_id="id", right_id="id")
-    # Match if email OR (first_name AND last_name)
+    # Cascading: email first, then (first_name, last_name) for unmatched
     results = matcher.match(rules=[
         ["email"],
         ["first_name", "last_name"]
@@ -222,7 +222,7 @@ def test_match_rules_entity_resolution():
 
 
 def test_match_rules_deduplication():
-    """Test rule-based matching for deduplication (OR logic)."""
+    """Test rule-based matching for deduplication (cascading: email then name for unmatched)."""
     df = pl.DataFrame({
         "id": [1, 2, 3, 4],
         "email": ["a@test.com", "b@test.com", "c@test.com", "d@test.com"],
@@ -231,7 +231,7 @@ def test_match_rules_deduplication():
     })
 
     deduplicator = Deduplicator(source=df, id_col="id")
-    # Match if email OR (first_name AND last_name)
+    # Cascading: email first, then name for unmatched
     results = deduplicator.match(rules=[
         ["email"],
         ["first_name", "last_name"]
@@ -321,7 +321,7 @@ def test_refine_entity_resolution_adds_name_matches():
     assert results.count == 1
     assert results.matches["id"].to_list() == [1]
 
-    refined = results.refine(matcher, rule=["first_name", "last_name"])
+    refined = results.refine(rule=["first_name", "last_name"])
     # Original (1, 10) + refined: (2, 20) on name Bob Jones. Left id=3 has no name match.
     assert refined.count == 2
     left_ids = refined.matches["id"].to_list()
@@ -345,7 +345,7 @@ def test_refine_deduplication_no_self_matches():
     # (1,2) or (2,1) if same email - we have only a@ and b@ unique, so maybe 0 dupes on email
     # Set up so email gives no/some matches, then refine on name gives (2,3), (2,4), (3,4) etc.
     results = deduplicator.match(rules="email")
-    refined = results.refine(deduplicator, rule=["first_name", "last_name"])
+    refined = results.refine(rule=["first_name", "last_name"])
     id_right = "id_right"
     assert id_right in refined.matches.columns
     self_matches = refined.matches.filter(pl.col("id") == pl.col(id_right))
@@ -360,13 +360,52 @@ def test_refine_all_matched_returns_same():
     results = matcher.match(rules="email")
     assert results.count == 2
 
-    refined = results.refine(matcher, rule=["email"])
+    refined = results.refine(rule=["email"])
     assert refined.count == 2
     assert refined.matches.height == results.matches.height
     # Same set of (id, id_right) pairs
     pairs_orig = set(zip(results.matches["id"].to_list(), results.matches["id_right"].to_list()))
     pairs_refined = set(zip(refined.matches["id"].to_list(), refined.matches["id_right"].to_list()))
     assert pairs_refined == pairs_orig
+
+
+def test_refine_with_blocking_key():
+    """Refine with blocking_key runs the rule only within blocks (same blocking_key value)."""
+    left = pl.DataFrame({
+        "id": [1, 2, 3],
+        "email": ["a@test.com", "nomatch@test.com", "nomatch2@test.com"],
+        "first_name": ["Alice", "Bob", "Bob"],
+        "last_name": ["Smith", "Jones", "Jones"],
+        "zip_code": ["10001", "10001", "10002"],
+    })
+    right = pl.DataFrame({
+        "id": [10, 20, 30],
+        "email": ["a@test.com", "b@test.com", "c@test.com"],
+        "first_name": ["Alice", "Bob", "Xavier"],
+        "last_name": ["Smith", "Jones", "Y"],
+        "zip_code": ["10001", "10001", "10002"],
+    })
+    matcher = Matcher(left=left, right=right, left_id="id", right_id="id")
+    results = matcher.match(rules="email")
+    # Only (1, 10) match on email. Unmatched: left 2 and 3.
+    assert results.count == 1
+    # Refine on name within zip: in 10001 block (left 2, right 10, 20) -> (2, 20) Bob Jones. In 10002 (left 3, right 30) -> no name match.
+    refined = results.refine(rule=["first_name", "last_name"], blocking_key="zip_code")
+    assert refined.count == 2
+    left_ids = refined.matches["id"].to_list()
+    assert 1 in left_ids and 2 in left_ids
+    assert 3 not in left_ids
+
+
+def test_refine_raises_when_no_matcher_available():
+    """Refine raises when MatchResults has no stored source and no matcher passed."""
+    left = pl.DataFrame({"id": [1], "email": ["a@test.com"]})
+    right = pl.DataFrame({"id": [2], "email": ["a@test.com"]})
+    matches = pl.DataFrame({"id": [1], "id_right": [2], "email": ["a@test.com"]})
+    results = MatchResults(matches, original_left=left)  # no source= stored
+
+    with pytest.raises(ValueError, match="refine\\(\\) requires a matcher"):
+        results.refine(rule=["email"])
 
 
 def test_refine_raises_when_original_left_missing():
@@ -378,7 +417,7 @@ def test_refine_raises_when_original_left_missing():
     matcher = Matcher(left=left, right=right, left_id="id", right_id="id")
 
     with pytest.raises(ValueError, match="original left data not available"):
-        results.refine(matcher, rule=["email"])
+        results.refine(rule=["email"], matcher=matcher)
 
 
 def test_refine_raises_when_matches_lack_id_structure():
@@ -391,7 +430,7 @@ def test_refine_raises_when_matches_lack_id_structure():
     results = MatchResults(matches_no_right, original_left=left)
 
     with pytest.raises(ValueError, match="Expected.*id.*and.*id_right"):
-        results.refine(matcher, rule=["email"])
+        results.refine(rule=["email"], matcher=matcher)
 
 
 # --- match_fuzzy (Phase 3) ---
