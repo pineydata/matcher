@@ -120,7 +120,7 @@ class Deduplicator:
             pl.col(self._id_col) != pl.col(id_col_right)
         )
 
-        return MatchResults(filtered_matches, original_left=self._matcher.left)
+        return MatchResults(filtered_matches, original_left=self._matcher.left, source=self)
 
     def match_fuzzy(
         self,
@@ -153,4 +153,4 @@ class Deduplicator:
         filtered_matches = results.matches.filter(
             pl.col(self._id_col) != pl.col(id_col_right)
         )
-        return MatchResults(filtered_matches, original_left=self._matcher.left)
+        return MatchResults(filtered_matches, original_left=self._matcher.left, source=self)

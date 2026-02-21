@@ -36,8 +36,7 @@ def test_entity_resolution_with_sample_data(sample_data_dir):
     results = matcher.match(rules=["address", "zip_code"])
     assert results.count >= 10, f"Expected at least 10 matches with address+zip rule, got {results.count}"
 
-    # Multiple rules (OR): should find all 40 matches
-    # Need to include address+zip to find multi-field matches
+    # Multiple rules (cascading): should find all 40 matches (one per left row)
     results = matcher.match(rules=["email", ["first_name", "last_name"], ["address", "zip_code"]])
     assert results.count >= 40, f"Expected at least 40 matches with OR rules, got {results.count}"
 

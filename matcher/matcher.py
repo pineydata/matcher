@@ -112,11 +112,17 @@ class Matcher:
         rules: Union[str, list[str], list[Union[str, list[str]]]],
         blocking_key: Optional[Union[str, List[Optional[str]]]] = None
     ) -> "MatchResults":
-        """Perform matching using the configured matching algorithm with sequential rule processing.
+        """Perform matching using the configured matching algorithm.
 
-        Rules are processed sequentially and combined with OR logic.
-        Optional blocking restricts candidate pairs to records that share the same blocking_key
-        value (e.g. zip_code), reducing comparisons and memory for large datasets.
+        With multiple rules, uses cascading semantics: try the first rule on the full
+        dataset; then try the next rule only on left rows that did not match yet; and
+        so on. Each left row is matched at most once (first rule that fires wins).
+        This is deterministic and efficient—once a left row has a match, we stop
+        looking. For a single rule, runs that rule only.
+
+        Optional blocking restricts candidate pairs to records that share the same
+        blocking_key value (e.g. zip_code); when multiple rules are used, blocking
+        applies to the first rule only; subsequent rules run on unmatched x full right.
 
         Args:
             rules: Matching rule(s). Can be:
@@ -125,7 +131,7 @@ class Matcher:
                   - Single rule with multiple fields (list[str]): ["first_name", "last_name"]
                   - Multiple rules (list): ["email", ["first_name", "last_name"]]
 
-                  Records match if ANY rule matches (OR logic).
+                  With multiple rules: cascading (first rule, then next for unmatched, etc.).
                   Within a rule, all fields must match together (AND logic).
             blocking_key: Optional. When set, only records with the same value in the blocking
                           column(s) are compared. Can be:
@@ -142,12 +148,12 @@ class Matcher:
             >>> results = matcher.match(rules="email")
             >>> # With blocking for performance
             >>> results = matcher.match(rules="email", blocking_key="zip_code")
-            >>> # Multiple rules: match if email OR (first_name AND last_name)
+            >>> # Multiple rules: cascading (email first, then name for unmatched)
             >>> results = matcher.match(rules=[
             ...     "email",
             ...     ["first_name", "last_name"]
             ... ])
-            >>> # Different blocking per rule: email within zip, name within state
+            >>> # Blocking applies to first rule; later rules run on unmatched x full right
             >>> results = matcher.match(rules=["email", ["first_name", "last_name"]],
             ...                        blocking_key=["zip_code", "state"])
         """
@@ -173,31 +179,31 @@ class Matcher:
                         self.left, self.right, [[key]]
                     )
 
-        # Process each rule (with its own blocks when blocking_key is per-rule)
-        all_matches = []
-        for i, rule in enumerate(normalized_rules):
-            if blocking_key is None:
-                blocks_for_rule = [(self.left, self.right)]
-            elif isinstance(blocking_key, str):
-                blocks_for_rule = self._block_pairs(blocking_key)
-            else:
-                bk = blocking_key[i]
-                blocks_for_rule = (
-                    [(self.left, self.right)]
-                    if bk is None
-                    else self._block_pairs(bk)
-                )
-            for left_block, right_block in blocks_for_rule:
-                rule_matches = self.matching_algorithm.match(
-                    left_block, right_block, rule, self.left_id, self.right_id
-                )
-                all_matches.append(rule_matches)
-
         # Import here to avoid circular dependency
         from matcher.results import MatchResults
 
+        # Process first rule only (with blocking if any). Further rules use cascading via refine().
+        first_rule = normalized_rules[0]
+        if blocking_key is None:
+            blocks_for_rule = [(self.left, self.right)]
+        elif isinstance(blocking_key, str):
+            blocks_for_rule = self._block_pairs(blocking_key)
+        else:
+            bk = blocking_key[0]
+            blocks_for_rule = (
+                [(self.left, self.right)]
+                if bk is None
+                else self._block_pairs(bk)
+            )
+        all_matches = []
+        for left_block, right_block in blocks_for_rule:
+            rule_matches = self.matching_algorithm.match(
+                left_block, right_block, first_rule, self.left_id, self.right_id
+            )
+            all_matches.append(rule_matches)
+
         if not all_matches:
-            # Empty result with same schema as non-empty: need a column present in both
+            # Empty result with same schema as non-empty
             if self.left_id == self.right_id and self.left_id in self.right.columns:
                 join_col = self.left_id
             else:
@@ -208,12 +214,21 @@ class Matcher:
                         f"Right columns: {list(self.right.columns)}"
                     )
             empty_result = self.left.join(self.right, on=join_col, how="inner").filter(pl.lit(False))
-            return MatchResults(empty_result, original_left=self.left)
+            results = MatchResults(empty_result, original_left=self.left, source=self)
+        else:
+            first_result = self._combine_matches(self.left, self.right, all_matches)
+            results = MatchResults(first_result, original_left=self.left, source=self)
 
-        # Combine results (OR logic)
-        final_result = self._combine_matches(self.left, self.right, all_matches)
+        # Cascading: apply remaining rules only to unmatched left rows (with optional blocking per rule)
+        for i, rule in enumerate(normalized_rules[1:]):
+            bk = None
+            if blocking_key is not None and isinstance(blocking_key, list):
+                bk = blocking_key[i + 1]  # blocking_key[0] was used for first rule
+            elif blocking_key is not None:
+                bk = blocking_key
+            results = results.refine(rule=rule, blocking_key=bk)
 
-        return MatchResults(final_result, original_left=self.left)
+        return results
 
     def _paired_blocks_by_key(
         self,
@@ -392,7 +407,7 @@ class Matcher:
             )
             .drop("_right_id_val")
         )
-        return MatchResults(result, original_left=self.left)
+        return MatchResults(result, original_left=self.left, source=self)
 
     def match_fuzzy(
         self,
@@ -502,7 +517,7 @@ class Matcher:
         )
 
         from matcher.results import MatchResults
-        return MatchResults(result, original_left=self.left)
+        return MatchResults(result, original_left=self.left, source=self)
 
     def _fuzzy_block_pairs(
         self,

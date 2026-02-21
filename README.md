@@ -61,8 +61,7 @@ deduplicator = Deduplicator(source=df, id_col="id")
 results = deduplicator.match(rules="email")
 print(f"Found {results.count} duplicate pairs")
 
-# Multiple matching rules (OR logic)
-# Match if email OR (first_name AND last_name)
+# Multiple rules: cascading (email first, then name for unmatched left rows)
 results = matcher.match(rules=[
     "email",
     ["first_name", "last_name"]
@@ -154,11 +153,24 @@ results = matcher.match(rules="email")
 
 ### Cascading matching (refine)
 
-Apply a second rule only to left-side records that did not match the first. Useful for “match on email first, then on name for the rest”:
+Additional rules run only on left-side records that didn’t match yet (cascading). Simplest: pass multiple rules and optional per-rule blocking:
 
 ```python
-results = matcher.match(rules="email")
-refined = results.refine(matcher, rule=["first_name", "last_name"])  # adds name matches for unmatched
+# Cascading with optional per-rule blocking
+results = matcher.match(
+    rules=["email", ["first_name", "last_name"], ["address"]],
+    blocking_key=["zip_code", "zip_code", "zip_code"]  # optional: one per rule
+)
+```
+
+Or chain manually:
+```python
+results = (
+    matcher
+    .match(rules="email")
+    .refine(rule=["first_name", "last_name"])
+    .refine(rule=["address"], blocking_key="zip_code")
+)
 ```
 
 See the test suite (`tests/`) for more examples of custom algorithms and usage.
