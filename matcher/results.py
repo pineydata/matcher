@@ -142,7 +142,7 @@ class MatchResults:
         if fraction is not None and not (0 < fraction <= 1):
             raise ValueError("fraction must be in the range (0, 1].")
         if self.matches.height == 0:
-            return MatchResults(self.matches, self._original_left)
+            return MatchResults(self.matches, self._original_left, self._source)
         if n is not None:
             sampled = self.matches.sample(n=min(n, self.matches.height), seed=seed)
         else:
