@@ -1,143 +1,189 @@
-"""Generate tutorial datasets in memory (no disk I/O).
+"""Generate tutorial datasets in memory (no disk/I/O).
 
 Used by tutorial_data.load and by scripts/generate_test_data.py when writing to data/.
+
+---
+
+Data generation design (pedagogical order)
+
+Think of the generator as building layers so each tutorial step has something to teach:
+
+  1. Exact name matches   — True pairs with identical full_name on both sides.
+                            Run A (full_name only) finds these.
+
+  2. Email adds value     — True pairs that match on email but NOT on exact full_name
+                            (e.g. same person, nickname on one side: William / Bill).
+                            Run A misses them; Run B (full_name then email cascade) finds them.
+                            So B recall > A recall.
+
+  3. False positives      — Many rows share the same zip (small zip pool). When we add
+                            full_name + zip_code cascade (Run C), we get more true pairs
+                            but also many false pairs (non-matches with same zip).
+                            So C has higher recall but much lower precision.
+
+  4. Fuzzy name matches   — True pairs with name variants (Jon / Jonathan, Kate / Catherine).
+                            Exact full_name misses; fuzzy on name (04) recovers them.
+
+  5. Random mismatches    — Filler rows that do not match any true pair (nulls, messy values
+                            for 01; rest are just other people).
+
+We create exact-name pairs, then email-adds-value pairs, then fuzzy-name pairs (30 true pairs).
+We then add 10 left + 10 right records from address_zip as **filler** (same first name, different
+last name, same address+zip—different people, so not in ground truth). Then filler to 500 each.
+Run C (full_name then zip) still sees zip matches and pulls in these false pairs.
 """
 
 import polars as pl
 
+# Small zip pool so many rows share a zip → zip cascade produces many false positives
+_ZIP_POOL = ("90210", "10001", "60601", "75201", "85001")
+
 
 def generate_entity_resolution_data():
-    """Generate two datasets with exotic matching scenarios for entity resolution.
+    """Generate two datasets for the entity resolution tutorial (01–04+).
 
-    Creates matches that test different rules:
-    - Email-only matches (10)
-    - Name-only matches (first_name + last_name, different emails) (10)
-    - Multi-field matches (address + zip_code together) (10)
-    - Mixed scenarios (can match on multiple rules) (10)
+    Builds 30 true pairs: exact name (10) → email adds value (10) → fuzzy name (10).
+    Then adds 10 left + 10 right from address_zip as filler (same first name, different last name
+    at same address—different people, not in ground truth). Then filler to 500 each.
     """
 
     known_matches = []
-    match_types = []  # Track match type for ground truth
+    match_types = []
 
-    # 1. Email-only matches (10)
-    # These match ONLY on email - names/addresses differ
-    email_only = [
-        ("alice.smith@example.com", "Alice", "Smith", "123 Main St", "New York", "NY", "10001", "email"),
-        ("bob.jones@example.com", "Bob", "Jones", "456 Oak Ave", "Los Angeles", "CA", "10002", "email"),
-        ("charlie.brown@example.com", "Charlie", "Brown", "789 Pine Rd", "Chicago", "IL", "10003", "email"),
-        ("diana.prince@example.com", "Diana", "Prince", "321 Elm St", "Houston", "TX", "10004", "email"),
-        ("edward.norton@example.com", "Edward", "Norton", "654 Maple Dr", "Phoenix", "AZ", "10005", "email"),
-        ("fiona.apple@example.com", "Fiona", "Apple", "987 Cedar Ln", "Philadelphia", "PA", "10006", "email"),
-        ("george.washington@example.com", "George", "Washington", "147 Birch Way", "San Antonio", "TX", "10007", "email"),
-        ("helen.troy@example.com", "Helen", "Troy", "258 Spruce Ct", "San Diego", "CA", "10008", "email"),
-        ("isaac.newton@example.com", "Isaac", "Newton", "369 Willow Pl", "Dallas", "TX", "10009", "email"),
-        ("jane.doe@example.com", "Jane", "Doe", "741 Ash Blvd", "San Jose", "CA", "10010", "email"),
+    # -------------------------------------------------------------------------
+    # 1. Exact name matches (10 pairs)
+    # Same full_name both sides, different emails. Run A (full_name only) finds these.
+    # Different zips left/right so zip cascade does not find them.
+    # -------------------------------------------------------------------------
+    exact_name = [
+        ("alice.smith@acme.org", "Alice", "Smith", "123 Main St", "New York", "NY", _ZIP_POOL[0], "exact_name"),
+        ("alice.smith@globex.com", "Alice", "Smith", "456 Other Ave", "Boston", "MA", _ZIP_POOL[1], "exact_name"),
+        ("bob.jones@acme.org", "Bob", "Jones", "789 Oak Rd", "Chicago", "IL", _ZIP_POOL[1], "exact_name"),
+        ("bob.jones@globex.com", "Bob", "Jones", "101 Pine Ln", "Denver", "CO", _ZIP_POOL[2], "exact_name"),
+        ("carol.white@acme.org", "Carol", "White", "202 Elm St", "Houston", "TX", _ZIP_POOL[2], "exact_name"),
+        ("carol.white@globex.com", "Carol", "White", "303 Maple Dr", "Phoenix", "AZ", _ZIP_POOL[3], "exact_name"),
+        ("dave.brown@acme.org", "Dave", "Brown", "404 Cedar Ct", "Philadelphia", "PA", _ZIP_POOL[3], "exact_name"),
+        ("dave.brown@globex.com", "Dave", "Brown", "505 Birch Way", "San Antonio", "TX", _ZIP_POOL[4], "exact_name"),
+        ("eva.garcia@acme.org", "Eva", "Garcia", "606 Willow Pl", "San Diego", "CA", _ZIP_POOL[4], "exact_name"),
+        ("eva.garcia@globex.com", "Eva", "Garcia", "707 Ash Blvd", "Dallas", "TX", _ZIP_POOL[0], "exact_name"),
+        ("frank.lee@acme.org", "Frank", "Lee", "808 Pine Rd", "San Jose", "CA", _ZIP_POOL[0], "exact_name"),
+        ("frank.lee@globex.com", "Frank", "Lee", "909 Oak Ave", "Austin", "TX", _ZIP_POOL[1], "exact_name"),
+        ("grace.kim@acme.org", "Grace", "Kim", "110 Cedar Ln", "Jacksonville", "FL", _ZIP_POOL[2], "exact_name"),
+        ("grace.kim@globex.com", "Grace", "Kim", "211 Elm St", "Columbus", "OH", _ZIP_POOL[3], "exact_name"),
+        ("henry.wong@acme.org", "Henry", "Wong", "312 Maple Dr", "Charlotte", "NC", _ZIP_POOL[3], "exact_name"),
+        ("henry.wong@globex.com", "Henry", "Wong", "413 Birch Way", "Seattle", "WA", _ZIP_POOL[4], "exact_name"),
+        ("iris.chen@acme.org", "Iris", "Chen", "514 Willow Pl", "Portland", "OR", _ZIP_POOL[4], "exact_name"),
+        ("iris.chen@globex.com", "Iris", "Chen", "615 Ash Blvd", "Detroit", "MI", _ZIP_POOL[0], "exact_name"),
+        ("jack.nelson@acme.org", "Jack", "Nelson", "716 Pine Rd", "Minneapolis", "MN", _ZIP_POOL[1], "exact_name"),
+        ("jack.nelson@globex.com", "Jack", "Nelson", "817 Oak Ave", "Cleveland", "OH", _ZIP_POOL[2], "exact_name"),
     ]
 
-    # 2. Name-only matches (10 pairs = 20 records)
-    # These match ONLY on first_name + last_name - emails differ
-    name_only = [
-        ("name1.left@example.com", "Kevin", "Bacon", "111 Name St", "Boston", "MA", "20001", "name"),
-        ("name1.right@example.com", "Kevin", "Bacon", "222 Name Ave", "Seattle", "WA", "20002", "name"),
-        ("name2.left@example.com", "Lisa", "Simpson", "333 Name Rd", "Denver", "CO", "20003", "name"),
-        ("name2.right@example.com", "Lisa", "Simpson", "444 Name Dr", "Portland", "OR", "20004", "name"),
-        ("name3.left@example.com", "Michael", "Jackson", "555 Name Ln", "Miami", "FL", "20005", "name"),
-        ("name3.right@example.com", "Michael", "Jackson", "666 Name Way", "Atlanta", "GA", "20006", "name"),
-        ("name4.left@example.com", "Nancy", "Drew", "777 Name Ct", "Detroit", "MI", "20007", "name"),
-        ("name4.right@example.com", "Nancy", "Drew", "888 Name Pl", "Minneapolis", "MN", "20008", "name"),
-        ("name5.left@example.com", "Oscar", "Wilde", "999 Name Blvd", "Tampa", "FL", "20009", "name"),
-        ("name5.right@example.com", "Oscar", "Wilde", "101 Name St", "Orlando", "FL", "20010", "name"),
-        ("name6.left@example.com", "Penelope", "Cruz", "201 Name St", "Cleveland", "OH", "20011", "name"),
-        ("name6.right@example.com", "Penelope", "Cruz", "202 Name Ave", "Cincinnati", "OH", "20012", "name"),
-        ("name7.left@example.com", "Quentin", "Tarantino", "203 Name Rd", "Pittsburgh", "PA", "20013", "name"),
-        ("name7.right@example.com", "Quentin", "Tarantino", "204 Name Dr", "Raleigh", "NC", "20014", "name"),
-        ("name8.left@example.com", "Rachel", "Weisz", "205 Name Ln", "Oakland", "CA", "20015", "name"),
-        ("name8.right@example.com", "Rachel", "Weisz", "206 Name Way", "Sacramento", "CA", "20016", "name"),
-        ("name9.left@example.com", "Steve", "Martin", "207 Name Ct", "Kansas City", "MO", "20017", "name"),
-        ("name9.right@example.com", "Steve", "Martin", "208 Name Pl", "St. Louis", "MO", "20018", "name"),
-        ("name10.left@example.com", "Tina", "Turner", "209 Name Blvd", "Columbus", "OH", "20019", "name"),
-        ("name10.right@example.com", "Tina", "Turner", "210 Name St", "Indianapolis", "IN", "20020", "name"),
+    # -------------------------------------------------------------------------
+    # 2. Email adds value (10 pairs)
+    # Same email both sides, but name variant (William / Bill) so exact full_name
+    # does NOT match. Run A misses; Run B (full_name then email cascade) finds them.
+    # Same zip both sides so they could be found by zip cascade too.
+    # -------------------------------------------------------------------------
+    email_adds_value = [
+        ("william.davis@acme.org", "William", "Davis", "100 A St", "Miami", "FL", _ZIP_POOL[0], "email_adds_value"),
+        ("william.davis@acme.org", "Bill", "Davis", "200 B Ave", "Tampa", "FL", _ZIP_POOL[0], "email_adds_value"),
+        ("margaret.taylor@acme.org", "Margaret", "Taylor", "301 C Rd", "Atlanta", "GA", _ZIP_POOL[1], "email_adds_value"),
+        ("margaret.taylor@acme.org", "Maggie", "Taylor", "402 D Ln", "Raleigh", "NC", _ZIP_POOL[1], "email_adds_value"),
+        ("robert.martinez@acme.org", "Robert", "Martinez", "503 E Ct", "Nashville", "TN", _ZIP_POOL[2], "email_adds_value"),
+        ("robert.martinez@acme.org", "Bob", "Martinez", "604 F Way", "Memphis", "TN", _ZIP_POOL[2], "email_adds_value"),
+        ("elizabeth.hall@acme.org", "Elizabeth", "Hall", "705 G Pl", "Louisville", "KY", _ZIP_POOL[3], "email_adds_value"),
+        ("elizabeth.hall@acme.org", "Liz", "Hall", "806 H Blvd", "Baltimore", "MD", _ZIP_POOL[3], "email_adds_value"),
+        ("james.wilson@acme.org", "James", "Wilson", "907 I St", "Milwaukee", "WI", _ZIP_POOL[4], "email_adds_value"),
+        ("james.wilson@acme.org", "Jim", "Wilson", "108 J Ave", "Albuquerque", "NM", _ZIP_POOL[4], "email_adds_value"),
+        ("patricia.clark@acme.org", "Patricia", "Clark", "209 K Rd", "Tucson", "AZ", _ZIP_POOL[0], "email_adds_value"),
+        ("patricia.clark@acme.org", "Pat", "Clark", "310 L Dr", "Fresno", "CA", _ZIP_POOL[0], "email_adds_value"),
+        ("daniel.lewis@acme.org", "Daniel", "Lewis", "411 M Ct", "Sacramento", "CA", _ZIP_POOL[1], "email_adds_value"),
+        ("daniel.lewis@acme.org", "Dan", "Lewis", "512 N Way", "Kansas City", "MO", _ZIP_POOL[1], "email_adds_value"),
+        ("christopher.lee@acme.org", "Christopher", "Lee", "613 O Pl", "Virginia Beach", "VA", _ZIP_POOL[2], "email_adds_value"),
+        ("christopher.lee@acme.org", "Chris", "Lee", "714 P Blvd", "Omaha", "NE", _ZIP_POOL[2], "email_adds_value"),
+        ("anthony.green@acme.org", "Anthony", "Green", "815 Q St", "Oakland", "CA", _ZIP_POOL[3], "email_adds_value"),
+        ("anthony.green@acme.org", "Tony", "Green", "916 R Ave", "Mesa", "AZ", _ZIP_POOL[3], "email_adds_value"),
+        ("jennifer.adams@acme.org", "Jennifer", "Adams", "117 S Rd", "Long Beach", "CA", _ZIP_POOL[4], "email_adds_value"),
+        ("jennifer.adams@acme.org", "Jen", "Adams", "218 T Ln", "Colorado Springs", "CO", _ZIP_POOL[4], "email_adds_value"),
     ]
 
-    # 3. Multi-field matches (10 pairs = 20 records)
-    # These require address + zip_code together - names/emails differ
-    multi_field = [
-        ("multi1.left@example.com", "Patricia", "Highsmith", "111 Multi St", "Austin", "TX", "30001", "address+zip"),
-        ("multi1.right@example.com", "Patricia", "Different", "111 Multi St", "Austin", "TX", "30001", "address+zip"),
-        ("multi2.left@example.com", "Quentin", "Tarantino", "333 Multi Rd", "Nashville", "TN", "30002", "address+zip"),
-        ("multi2.right@example.com", "Quentin", "Other", "333 Multi Rd", "Nashville", "TN", "30002", "address+zip"),
-        ("multi3.left@example.com", "Rachel", "Green", "555 Multi Ln", "Virginia Beach", "VA", "30003", "address+zip"),
-        ("multi3.right@example.com", "Rachel", "Blue", "555 Multi Ln", "Virginia Beach", "VA", "30003", "address+zip"),
-        ("multi4.left@example.com", "Steve", "Jobs", "777 Multi Ct", "Milwaukee", "WI", "30004", "address+zip"),
-        ("multi4.right@example.com", "Steve", "Gates", "777 Multi Ct", "Milwaukee", "WI", "30004", "address+zip"),
-        ("multi5.left@example.com", "Tina", "Fey", "999 Multi Blvd", "Albuquerque", "NM", "30005", "address+zip"),
-        ("multi5.right@example.com", "Tina", "Poehler", "999 Multi Blvd", "Albuquerque", "NM", "30005", "address+zip"),
-        ("multi6.left@example.com", "Uma", "Thurman", "301 Multi St", "Tucson", "AZ", "30006", "address+zip"),
-        ("multi6.right@example.com", "Uma", "Different", "301 Multi St", "Tucson", "AZ", "30006", "address+zip"),
-        ("multi7.left@example.com", "Vera", "Farmiga", "303 Multi Rd", "Fresno", "CA", "30007", "address+zip"),
-        ("multi7.right@example.com", "Vera", "Other", "303 Multi Rd", "Fresno", "CA", "30007", "address+zip"),
-        ("multi8.left@example.com", "Will", "Smith", "305 Multi Ln", "Mesa", "AZ", "30008", "address+zip"),
-        ("multi8.right@example.com", "Will", "Ferrell", "305 Multi Ln", "Mesa", "AZ", "30008", "address+zip"),
-        ("multi9.left@example.com", "Xavier", "Dolan", "307 Multi Ct", "Sacramento", "CA", "30009", "address+zip"),
-        ("multi9.right@example.com", "Xavier", "Other", "307 Multi Ct", "Sacramento", "CA", "30009", "address+zip"),
-        ("multi10.left@example.com", "Yara", "Shahidi", "309 Multi Blvd", "Long Beach", "CA", "30010", "address+zip"),
-        ("multi10.right@example.com", "Yara", "Different", "309 Multi Blvd", "Long Beach", "CA", "30010", "address+zip"),
+    # -------------------------------------------------------------------------
+    # 3. Address+zip — false-positive driver (NOT true pairs: same first name, different last name = different people)
+    # These 10 pairs are added as FILLER only (same address+zip, different names). full_name misses;
+    # zip cascade finds them as candidates → they should count as false positives in ground truth.
+    # -------------------------------------------------------------------------
+    address_zip = [
+        ("patricia.lane@acme.org", "Patricia", "Lane", "111 Multi St", "Austin", "TX", _ZIP_POOL[0], "address_zip"),
+        ("p.different@globex.com", "Patricia", "Moss", "111 Multi St", "Austin", "TX", _ZIP_POOL[0], "address_zip"),
+        ("quentin.reed@acme.org", "Quentin", "Reed", "333 Multi Rd", "Nashville", "TN", _ZIP_POOL[1], "address_zip"),
+        ("q.other@globex.com", "Quentin", "Cole", "333 Multi Rd", "Nashville", "TN", _ZIP_POOL[1], "address_zip"),
+        ("rachel.green@acme.org", "Rachel", "Green", "555 Multi Ln", "Virginia Beach", "VA", _ZIP_POOL[2], "address_zip"),
+        ("r.blue@globex.com", "Rachel", "Blue", "555 Multi Ln", "Virginia Beach", "VA", _ZIP_POOL[2], "address_zip"),
+        ("steve.marsh@acme.org", "Steve", "Marsh", "777 Multi Ct", "Milwaukee", "WI", _ZIP_POOL[3], "address_zip"),
+        ("s.gates@globex.com", "Steve", "Gates", "777 Multi Ct", "Milwaukee", "WI", _ZIP_POOL[3], "address_zip"),
+        ("tina.webb@acme.org", "Tina", "Webb", "999 Multi Blvd", "Albuquerque", "NM", _ZIP_POOL[4], "address_zip"),
+        ("t.shaw@globex.com", "Tina", "Shaw", "999 Multi Blvd", "Albuquerque", "NM", _ZIP_POOL[4], "address_zip"),
+        ("uma.clark@acme.org", "Uma", "Clark", "301 Multi St", "Tucson", "AZ", _ZIP_POOL[0], "address_zip"),
+        ("u.different@globex.com", "Uma", "Ward", "301 Multi St", "Tucson", "AZ", _ZIP_POOL[0], "address_zip"),
+        ("vera.hill@acme.org", "Vera", "Hill", "303 Multi Rd", "Fresno", "CA", _ZIP_POOL[1], "address_zip"),
+        ("v.other@globex.com", "Vera", "Page", "303 Multi Rd", "Fresno", "CA", _ZIP_POOL[1], "address_zip"),
+        ("will.davis@acme.org", "Will", "Davis", "305 Multi Ln", "Mesa", "AZ", _ZIP_POOL[2], "address_zip"),
+        ("w.foster@globex.com", "Will", "Foster", "305 Multi Ln", "Mesa", "AZ", _ZIP_POOL[2], "address_zip"),
+        ("xavier.lee@acme.org", "Xavier", "Lee", "307 Multi Ct", "Sacramento", "CA", _ZIP_POOL[3], "address_zip"),
+        ("x.other@globex.com", "Xavier", "Bell", "307 Multi Ct", "Sacramento", "CA", _ZIP_POOL[3], "address_zip"),
+        ("yara.moore@acme.org", "Yara", "Moore", "309 Multi Blvd", "Long Beach", "CA", _ZIP_POOL[4], "address_zip"),
+        ("y.different@globex.com", "Yara", "Reed", "309 Multi Blvd", "Long Beach", "CA", _ZIP_POOL[4], "address_zip"),
     ]
 
-    # 4. Mixed scenarios (10 pairs = 20 records)
-    # These can match on multiple rules (email OR name) - same email AND same name
-    mixed = [
-        ("mixed1@example.com", "Emma", "Watson", "111 Mixed St", "Kansas City", "KS", "40001", "email_or_name"),
-        ("mixed1@example.com", "Emma", "Watson", "222 Mixed Ave", "Omaha", "NE", "40002", "email_or_name"),
-        ("mixed2@example.com", "Daniel", "Radcliffe", "333 Mixed Rd", "Miami", "FL", "40003", "email_or_name"),
-        ("mixed2@example.com", "Daniel", "Radcliffe", "444 Mixed Dr", "Oakland", "CA", "40004", "email_or_name"),
-        ("mixed3@example.com", "Rupert", "Grint", "555 Mixed Ln", "Raleigh", "NC", "40005", "email_or_name"),
-        ("mixed3@example.com", "Rupert", "Grint", "666 Mixed Way", "Minneapolis", "MN", "40006", "email_or_name"),
-        ("mixed4@example.com", "Tom", "Hanks", "777 Mixed Ct", "Cleveland", "OH", "40007", "email_or_name"),
-        ("mixed4@example.com", "Tom", "Hanks", "888 Mixed Pl", "Tulsa", "OK", "40008", "email_or_name"),
-        ("mixed5@example.com", "Meryl", "Streep", "999 Mixed Blvd", "Arlington", "TX", "40009", "email_or_name"),
-        ("mixed5@example.com", "Meryl", "Streep", "101 Mixed St", "Tampa", "FL", "40010", "email_or_name"),
-        ("mixed6@example.com", "Natalie", "Portman", "401 Mixed St", "New Orleans", "LA", "40011", "email_or_name"),
-        ("mixed6@example.com", "Natalie", "Portman", "402 Mixed Ave", "Wichita", "KS", "40012", "email_or_name"),
-        ("mixed7@example.com", "Olivia", "Wilde", "403 Mixed Rd", "Cincinnati", "OH", "40013", "email_or_name"),
-        ("mixed7@example.com", "Olivia", "Wilde", "404 Mixed Dr", "St. Paul", "MN", "40014", "email_or_name"),
-        ("mixed8@example.com", "Paul", "Rudd", "405 Mixed Ln", "Toledo", "OH", "40015", "email_or_name"),
-        ("mixed8@example.com", "Paul", "Rudd", "406 Mixed Way", "Greensboro", "NC", "40016", "email_or_name"),
-        ("mixed9@example.com", "Ryan", "Reynolds", "407 Mixed Ct", "Newark", "NJ", "40017", "email_or_name"),
-        ("mixed9@example.com", "Ryan", "Reynolds", "408 Mixed Pl", "Plano", "TX", "40018", "email_or_name"),
-        ("mixed10@example.com", "Zoe", "Saldana", "409 Mixed Blvd", "Henderson", "NV", "40019", "email_or_name"),
-        ("mixed10@example.com", "Zoe", "Saldana", "410 Mixed St", "Lincoln", "NE", "40020", "email_or_name"),
+    # -------------------------------------------------------------------------
+    # 4. Fuzzy name matches (10 pairs)
+    # Name variant (Jonathan / Jon), different emails. Exact full_name misses;
+    # fuzzy on name (04) recovers. Different zips so zip cascade does not find them.
+    # -------------------------------------------------------------------------
+    fuzzy_name = [
+        ("jonathan.smith@acme.org", "Jonathan", "Smith", "111 Name St", "Boston", "MA", _ZIP_POOL[0], "fuzzy_name"),
+        ("j.smith@globex.com", "Jon", "Smith", "222 Name Ave", "Seattle", "WA", _ZIP_POOL[1], "fuzzy_name"),
+        ("katherine.jones@acme.org", "Katherine", "Jones", "333 Name Rd", "Denver", "CO", _ZIP_POOL[2], "fuzzy_name"),
+        ("catherine.jones@globex.com", "Catherine", "Jones", "444 Name Dr", "Portland", "OR", _ZIP_POOL[3], "fuzzy_name"),
+        ("michael.brown@acme.org", "Michael", "Brown", "555 Name Ln", "Miami", "FL", _ZIP_POOL[4], "fuzzy_name"),
+        ("mike.brown@globex.com", "Mike", "Brown", "666 Name Way", "Atlanta", "GA", _ZIP_POOL[0], "fuzzy_name"),
+        ("robert.wilson@acme.org", "Robert", "Wilson", "777 Name Ct", "Detroit", "MI", _ZIP_POOL[1], "fuzzy_name"),
+        ("r.wilson@globex.com", "R.", "Wilson", "888 Name Pl", "Minneapolis", "MN", _ZIP_POOL[2], "fuzzy_name"),
+        ("steven.moore@acme.org", "Steven", "Moore", "999 Name Blvd", "Tampa", "FL", _ZIP_POOL[3], "fuzzy_name"),
+        ("steven.moore@globex.com", "Steve", "Moore", "101 Name St", "Orlando", "FL", _ZIP_POOL[4], "fuzzy_name"),
+        ("matthew.young@acme.org", "Matthew", "Young", "201 Name St", "Cleveland", "OH", _ZIP_POOL[0], "fuzzy_name"),
+        ("matthew.young@globex.com", "Matt", "Young", "202 Name Ave", "Cincinnati", "OH", _ZIP_POOL[1], "fuzzy_name"),
+        ("nicholas.scott@acme.org", "Nicholas", "Scott", "203 Name Rd", "Pittsburgh", "PA", _ZIP_POOL[2], "fuzzy_name"),
+        ("nicholas.scott@globex.com", "Nick", "Scott", "204 Name Dr", "Raleigh", "NC", _ZIP_POOL[3], "fuzzy_name"),
+        ("timothy.king@acme.org", "Timothy", "King", "205 Name Ln", "Oakland", "CA", _ZIP_POOL[4], "fuzzy_name"),
+        ("timothy.king@globex.com", "Tim", "King", "206 Name Way", "Sacramento", "CA", _ZIP_POOL[0], "fuzzy_name"),
+        ("deborah.wright@acme.org", "Deborah", "Wright", "207 Name Ct", "Kansas City", "MO", _ZIP_POOL[1], "fuzzy_name"),
+        ("deborah.wright@globex.com", "Debra", "Wright", "208 Name Pl", "St. Louis", "MO", _ZIP_POOL[2], "fuzzy_name"),
+        ("alexander.hill@acme.org", "Alexander", "Hill", "209 Name Blvd", "Columbus", "OH", _ZIP_POOL[3], "fuzzy_name"),
+        ("alexander.hill@globex.com", "Alex", "Hill", "210 Name St", "Indianapolis", "IN", _ZIP_POOL[4], "fuzzy_name"),
     ]
 
-    # Create proper pairs for each match type
+    # Build all_pairs in pedagogical order (only TRUE pairs: 30 total)
+    # Do NOT add address_zip to all_pairs — those are different people (same first name, different last name).
     all_pairs = []
-
-    # Email-only: 10 pairs (same record on both sides)
-    for match in email_only:
-        email, first, last, address, city, state, zip_code, _ = match
-        all_pairs.append(((email, first, last, address, city, state, zip_code),
-                         (email, first, last, address, city, state, zip_code), "email"))
-
-    # Name-only: 10 pairs (different emails, same names)
-    for i in range(0, len(name_only), 2):
-        left_email, left_first, left_last, left_addr, left_city, left_state, left_zip, _ = name_only[i]
-        right_email, right_first, right_last, right_addr, right_city, right_state, right_zip, _ = name_only[i+1]
-        all_pairs.append(((left_email, left_first, left_last, left_addr, left_city, left_state, left_zip),
-                         (right_email, right_first, right_last, right_addr, right_city, right_state, right_zip), "name"))
-
-    # Multi-field: 10 pairs (same address+zip, different names/emails)
-    for i in range(0, len(multi_field), 2):
-        left_email, left_first, left_last, left_addr, left_city, left_state, left_zip, _ = multi_field[i]
-        right_email, right_first, right_last, right_addr, right_city, right_state, right_zip, _ = multi_field[i+1]
-        all_pairs.append(((left_email, left_first, left_last, left_addr, left_city, left_state, left_zip),
-                         (right_email, right_first, right_last, right_addr, right_city, right_state, right_zip), "address+zip"))
-
-    # Mixed: 10 pairs (same email AND same name - can match on either)
-    for i in range(0, len(mixed), 2):
-        left_email, left_first, left_last, left_addr, left_city, left_state, left_zip, _ = mixed[i]
-        right_email, right_first, right_last, right_addr, right_city, right_state, right_zip, _ = mixed[i+1]
-        all_pairs.append(((left_email, left_first, left_last, left_addr, left_city, left_state, left_zip),
-                         (right_email, right_first, right_last, right_addr, right_city, right_state, right_zip), "email_or_name"))
+    for i in range(0, len(exact_name), 2):
+        l = exact_name[i]
+        r = exact_name[i + 1]
+        all_pairs.append(
+            ((l[0], l[1], l[2], l[3], l[4], l[5], l[6]), (r[0], r[1], r[2], r[3], r[4], r[5], r[6]), "exact_name")
+        )
+    for i in range(0, len(email_adds_value), 2):
+        l = email_adds_value[i]
+        r = email_adds_value[i + 1]
+        all_pairs.append(
+            ((l[0], l[1], l[2], l[3], l[4], l[5], l[6]), (r[0], r[1], r[2], r[3], r[4], r[5], r[6]), "email_adds_value")
+        )
+    for i in range(0, len(fuzzy_name), 2):
+        l = fuzzy_name[i]
+        r = fuzzy_name[i + 1]
+        all_pairs.append(
+            ((l[0], l[1], l[2], l[3], l[4], l[5], l[6]), (r[0], r[1], r[2], r[3], r[4], r[5], r[6]), "fuzzy_name")
+        )
 
     # Generate left source (500 records)
     left_data = []
@@ -160,6 +206,21 @@ def generate_entity_resolution_data():
         left_match_info.append((left_idx, len(all_pairs) - len([p for p in all_pairs if p[2] == match_type]) + sum(1 for p in all_pairs[:left_idx] if p[2] == match_type), match_type))
         left_idx += 1
 
+    # Add address_zip rows as FILLER (same first name, different last name = different people, not in ground truth)
+    for i in range(0, len(address_zip), 2):
+        email, first, last, address, city, state, zip_code = address_zip[i][0], address_zip[i][1], address_zip[i][2], address_zip[i][3], address_zip[i][4], address_zip[i][5], address_zip[i][6]
+        left_data.append({
+            "id": f"left_{left_idx+1}",
+            "email": email,
+            "first_name": first,
+            "last_name": last,
+            "address": address,
+            "city": city,
+            "state": state,
+            "zip_code": zip_code,
+        })
+        left_idx += 1
+
     # Add non-matching records (nulls + messy values for tutorial cleaning section)
     # Pool of plausible names and streets so filler rows don't look generic
     filler_left_names = [
@@ -180,11 +241,11 @@ def generate_entity_resolution_data():
     for i in range(500 - len(left_data)):
         city_idx = i % len(cities)
         first, last = filler_left_names[i % len(filler_left_names)]
-        base_email = f"{first.lower()}.{last.lower()}.{i}@example.com"
+        base_email = f"{first.lower()}.{last.lower()}.{i}@acme.org"
         if i < 5:
             email = None
         elif i < 15:
-            email = f"  {first.lower()}.{last.lower()}.{i}@EXAMPLE.com  "
+            email = f"  {first.lower()}.{last.lower()}.{i}@ACME.ORG  "
         else:
             email = base_email
         first_display = f"  {first}{i}  " if 20 <= i < 25 else first
@@ -196,7 +257,7 @@ def generate_entity_resolution_data():
             "address": f"{100 + (i % 997)} {streets[i % len(streets)]}",
             "city": cities[city_idx],
             "state": states[city_idx],
-            "zip_code": None if i in (10, 11, 12) else f"{50000 + i}",
+            "zip_code": None if i in (10, 11, 12) else _ZIP_POOL[i % len(_ZIP_POOL)],
         })
         left_idx += 1
 
@@ -221,6 +282,21 @@ def generate_entity_resolution_data():
         right_match_info.append((right_idx, len(all_pairs) - len([p for p in all_pairs if p[2] == match_type]) + sum(1 for p in all_pairs[:right_idx] if p[2] == match_type), match_type))
         right_idx += 1
 
+    # Add address_zip rows as FILLER (right side: different people, not in ground truth)
+    for i in range(1, len(address_zip), 2):
+        email, first, last, address, city, state, zip_code = address_zip[i][0], address_zip[i][1], address_zip[i][2], address_zip[i][3], address_zip[i][4], address_zip[i][5], address_zip[i][6]
+        right_data.append({
+            "id": f"right_{right_idx+1}",
+            "email_address": email,
+            "first_name": first,
+            "last_name": last,
+            "address": address,
+            "city": city,
+            "state": state,
+            "postal_code": zip_code,
+        })
+        right_idx += 1
+
     # Add non-matching records (nulls + messy values for tutorial cleaning section)
     filler_right_names = [
         ("Amanda", "Phillips"), ("Brian", "Evans"), ("Stephanie", "Turner"), ("George", "Diaz"),
@@ -240,8 +316,8 @@ def generate_entity_resolution_data():
     for i in range(500 - len(right_data)):
         city_idx = i % len(cities)
         first, last = filler_right_names[i % len(filler_right_names)]
-        base_email = f"{first.lower()}.{last.lower()}.{i}@example.com"
-        email = f"  {first.lower()}.{last.lower()}.{i}@Example.COM  " if 8 <= i < 18 else base_email
+        base_email = f"{first.lower()}.{last.lower()}.{i}@globex.com"
+        email = f"  {first.lower()}.{last.lower()}.{i}@GLOBEX.COM  " if 8 <= i < 18 else base_email
         first_name = None if i < 4 else (f"  {first}{i}  " if 15 <= i < 20 else first)
         right_data.append({
             "id": f"right_{right_idx+1}",
@@ -251,7 +327,7 @@ def generate_entity_resolution_data():
             "address": f"{200 + (i % 991)} {streets_r[i % len(streets_r)]}",
             "city": cities[city_idx],
             "state": states[city_idx],
-            "postal_code": None if i in (5, 6, 7) else f"{60000 + i}",
+            "postal_code": None if i in (5, 6, 7) else _ZIP_POOL[i % len(_ZIP_POOL)],
         })
         right_idx += 1
 

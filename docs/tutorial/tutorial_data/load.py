@@ -39,12 +39,14 @@ def load_blocking_evaluation() -> tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame
 
 
 def load_entity_resolution() -> tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame]:
-    """Load entity resolution set **raw** (500×500, 40 pairs; column name mismatches, nulls, messy values).
-    Use for 01 Preparation to walk through cleaning. Returns (left, right, ground_truth)."""
+    """Load entity resolution set **raw** (500×500, 30 true pairs; column name mismatches, nulls, messy values).
+    Use for 01 Preparation to walk through cleaning. Returns (left, right, ground_truth).
+    Ground truth: 30 pairs only (exact_name + email_adds_value + fuzzy_name). Same first name + different
+    last name at same address (address_zip) are filler—not in ground truth, so Run C zip cascade yields false positives."""
     left, right, _, _, _, _ = generate_entity_resolution_data()
     ground_truth = pl.DataFrame({
-        "left_id": [f"left_{i+1}" for i in range(40)],
-        "right_id": [f"right_{i+1}" for i in range(40)],
+        "left_id": [f"left_{i+1}" for i in range(30)],
+        "right_id": [f"right_{i+1}" for i in range(30)],
     })
     return left, right, ground_truth
 

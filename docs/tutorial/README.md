@@ -29,8 +29,8 @@ Optional: from repo root run `uv run python scripts/generate_test_data.py` to wr
 | [02_exact_matching](02_exact_matching.ipynb) | Exact matching: single rule, cascading rules, evaluate API |
 | [03_measurement_loop](03_measurement_loop.ipynb) | The measurement loop: measure → change one thing → compare |
 | [04_fuzzy_matching](04_fuzzy_matching.ipynb) | Fuzzy matching: one field, threshold, confidence (uses fuzzy_evaluation) |
-| [05_blocking](05_blocking.ipynb) | Blocking: when it helps and when it hurts recall (uses blocking_evaluation) |
-| [06_design_algorithm](06_design_algorithm.ipynb) | Exact+fuzzy combo, blended score |
+| [05_design_algorithm](05_design_algorithm.ipynb) | Design: exact+fuzzy combo, fuzzy first + exact last, blended score |
+| [06_blocking](06_blocking.ipynb) | Blocking: when it helps and when it hurts recall (uses blocking_evaluation) |
 | [07_deduplication](07_deduplication.ipynb) | Deduplication on a single table |
 
 ## Related docs
