@@ -16,6 +16,10 @@ dev = [
     "pytest>=7.0.0",
     "pytest-cov>=4.0.0",
 ]
+tutorial = [
+    "jupyter>=1.0.0",
+    "ipykernel>=6.0.0",
+]
 
 [build-system]
 requires = ["hatchling"]
@@ -28,4 +32,9 @@ packages = ["matcher"]
 dev = [
     "pytest>=7.0.0",
     "pytest-cov>=4.0.0",
+]
+# Dedicated to running docs/tutorial/ (Jupyter). Keep separate from main env.
+tutorial = [
+    "jupyter>=1.0.0",
+    "ipykernel>=6.0.0",
 ]
