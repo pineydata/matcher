@@ -18,14 +18,14 @@ Usage Pattern:
     >>> matcher = Matcher(left=left_df, right=right_df, left_id="id", right_id="id")
     >>>
     >>> # Basic matching
-    >>> results = matcher.match(rules="email")
+    >>> results = matcher.match(on="email")
     >>> print(f"Found {results.count} matches")
     >>>
     >>> # Chain operations (pipe pattern)
     >>> filtered = results.pipe(lambda df: df.filter(pl.col("confidence") > 0.9))
     >>>
-    >>> # Cascading matching (refine)
-    >>> refined = results.refine(rule=["first_name", "last_name"])
+    >>> # Cascading (refine)
+    >>> refined = results.refine(on=["first_name", "last_name"])
     >>>
     >>> # Evaluate against ground truth
     >>> metrics = results.evaluate(ground_truth)
@@ -130,7 +130,7 @@ class MatchResults:
             ValueError: If neither n nor fraction is set, or both are set.
 
         Example:
-            >>> results = matcher.match_fuzzy(field="name", threshold=0.85)
+            >>> results = matcher.match(on=["name"], matching_algorithm=FuzzyMatcher(threshold=0.85))
             >>> results.sample(n=50, seed=42).export_for_review("sample_for_review.csv")
         """
         if n is not None and fraction is not None:
@@ -151,59 +151,42 @@ class MatchResults:
 
     def refine(
         self,
-        rule: list[str],
+        on: Union[str, list[str]],
         matcher: Optional[Union["Matcher", "Deduplicator"]] = None,
-        blocking_key: Optional[str] = None,
+        blocking_key: Optional[Union[str, list[str]]] = None,
     ) -> "MatchResults":
-        """Refine matches by applying another rule to unmatched left records (optional).
+        """Refine matches by matching on another rule for unmatched left records.
 
-        This implements cascading matching:
-        1. First match on high-confidence rule (e.g., email)
-        2. Then match on lower-confidence rule (e.g., name) for unmatched records
-        3. Combine all matches
+        Cascade: first match(on=...), then refine(on=...) for unmatched rows.
 
         When results come from matcher.match() or deduplicator.match(), the matcher
-        is stored and you can call refine(rule=[...]) without passing matcher.
-
-        Optional blocking_key restricts this rule to pairs that share the same value
-        in that column (e.g. zip_code), reducing comparisons and memory.
-
-        Note: This is one approach to combining matches. For probabilistic matching
-        with confidence scores, you may want to use composite confidence scores instead
-        of cascading (matching all rules first, then combining with weighted scores).
+        is stored and you can call refine(on=[...]) without passing matcher.
 
         Args:
-            rule: Matching rule to apply to unmatched records
-            matcher: Optional. Matcher or Deduplicator (only needed if results were
-                    not from matcher.match() / deduplicator.match(), e.g. hand-built MatchResults)
-            blocking_key: Optional column name. When set, the rule runs only within
-                         blocks (unmatched left and right with the same blocking_key value).
+            on: What to match on for unmatched records (str or list[str]).
+            matcher: Optional. Only needed if results were not from match().
+            blocking_key: Optional column name or list of names. Restricts this step to same block(s).
 
         Returns:
-            New MatchResults with combined matches (original + refined)
-
-        Raises:
-            ValueError: If matches don't have the expected ID column structure, or
-                        if no matcher is available (not stored and not passed), or
-                        if blocking_key is missing from left or right.
+            New MatchResults with combined matches (original + refined).
 
         Example:
-            >>> # First match on email
-            >>> results = matcher.match(rules="email")
-            >>> # Then match on name for records that didn't match on email
-            >>> refined = results.refine(rule=["first_name", "last_name"])
-            >>> # With blocking: name match only within same zip_code
-            >>> refined = results.refine(rule=["first_name", "last_name"], blocking_key="zip_code")
+            >>> results = matcher.match(on="email")
+            >>> refined = results.refine(on=["first_name", "last_name"])
+            >>> refined = results.refine(on=["first_name", "last_name"], blocking_key="zip_code")
         """
-        # Import here to avoid circular dependency
         from matcher.deduplicator import Deduplicator
+
+        rule_list = [on] if isinstance(on, str) else list(on)
+        if not rule_list:
+            raise ValueError("refine(on=...) must be a non-empty string or list of field names")
 
         source = self._source if matcher is None else matcher
         if source is None:
             raise ValueError(
                 "refine() requires a matcher. Results from matcher.match() or "
                 "deduplicator.match() have it stored; otherwise pass matcher: "
-                "refine(rule=[...], matcher=matcher)."
+                "refine(on=[...], matcher=matcher)."
             )
 
         # Get the actual Matcher instance (Deduplicator wraps one)
@@ -259,23 +242,26 @@ class MatchResults:
         right_source = actual_matcher.right
 
         if blocking_key is not None:
-            if blocking_key not in unmatched_left.columns:
-                raise ValueError(
-                    f"blocking_key '{blocking_key}' not found in (unmatched) left. "
-                    f"Available: {unmatched_left.columns}"
-                )
-            if blocking_key not in right_source.columns:
-                raise ValueError(
-                    f"blocking_key '{blocking_key}' not found in right source. "
-                    f"Available: {right_source.columns}"
-                )
+            keys = actual_matcher._normalize_blocking_keys(blocking_key)
+            assert keys is not None  # only None when blocking_key is None
+            for k in keys:
+                if k not in unmatched_left.columns:
+                    raise ValueError(
+                        f"blocking_key '{k}' not found in (unmatched) left. "
+                        f"Available: {unmatched_left.columns}"
+                    )
+                if k not in right_source.columns:
+                    raise ValueError(
+                        f"blocking_key '{k}' not found in right source. "
+                        f"Available: {right_source.columns}"
+                    )
             blocks = actual_matcher._paired_blocks_by_key(
-                unmatched_left, right_source, blocking_key
+                unmatched_left, right_source, keys
             )
             block_matches = []
             for left_block, right_block in blocks:
                 block_result = actual_matcher.matching_algorithm.match(
-                    left_block, right_block, rule, left_id, right_id
+                    left_block, right_block, rule_list, left_id, right_id
                 )
                 block_matches.append(block_result)
             new_matches = actual_matcher._combine_matches(
@@ -285,7 +271,7 @@ class MatchResults:
             new_matches = actual_matcher.matching_algorithm.match(
                 left=unmatched_left,
                 right=right_source,
-                rule=rule,
+                rule=rule_list,
                 left_id=left_id,
                 right_id=right_id
             )
@@ -353,7 +339,7 @@ class MatchResults:
             ...     "left_id": ["left_1", "left_2"],
             ...     "right_id": ["right_1", "right_2"]
             ... })
-            >>> results = matcher.match(rules="email")
+            >>> results = matcher.match(on="email")
             >>> metrics = results.evaluate(ground_truth)
             >>> print(f"Precision: {metrics['precision']:.2%}")
             >>> print(f"Recall: {metrics['recall']:.2%}")
@@ -382,7 +368,7 @@ class MatchResults:
             path: Output path for the CSV file (str or pathlib.Path; use .csv).
 
         Example:
-            >>> results = matcher.match_fuzzy(field="name", threshold=0.85)
+            >>> results = matcher.match(on=["name"], matching_algorithm=FuzzyMatcher(threshold=0.85))
             >>> results.export_for_review("matches_for_review.csv")
             >>> # Export a sample for reviewers
             >>> results.sample(n=50, seed=42).export_for_review("sample_for_review.csv")
