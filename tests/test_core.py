@@ -864,3 +864,120 @@ def test_deduplicator_match_fuzzy_with_blocking_key():
     assert "confidence" in results.matches.columns
     self_matches = results.matches.filter(pl.col("id") == pl.col("id_right"))
     assert len(self_matches) == 0
+
+
+# --- MatchResults.union() ---
+
+
+def test_union_two_exact_results():
+    """Union of two exact match results combines pair sets; each run gets its own columns (no coalescing)."""
+    left = pl.DataFrame({
+        "id": [1, 2, 3],
+        "email": ["a@x.com", "b@x.com", "c@x.com"],
+        "name": ["Alice", "Bob", "Carol"],
+    })
+    right = pl.DataFrame({
+        "id": [10, 20, 30],
+        "email": ["a@x.com", "b@x.com", "d@x.com"],
+        "name": ["A. Smith", "B. Jones", "D. Lee"],
+    })
+    matcher = Matcher(left=left, right=right, left_id="id", right_id="id")
+    by_email = matcher.match(on="email")
+    by_name = matcher.match(on="name")  # no matches on name with this data
+    combined = by_email.union(by_name)
+    assert combined.count == by_email.count
+    assert "exact_score" in combined.matches.columns
+    assert "exact_on" in combined.matches.columns
+    # Second exact run gets _2 columns (by_name had no rows but still counts as a run)
+    assert "exact_score_2" in combined.matches.columns
+    assert "exact_on_2" in combined.matches.columns
+    assert combined.matches.filter(pl.col("exact_on").is_not_null()).height == by_email.count
+
+
+def test_union_two_exact_runs_same_pair_preserves_both():
+    """When the same pair appears in two exact runs, both runs' values are kept in separate columns."""
+    left = pl.DataFrame({
+        "id": [1, 2],
+        "email": ["a@x.com", "b@x.com"],
+        "name": ["Alice", "Bob"],
+    })
+    right = pl.DataFrame({
+        "id": [10, 20],
+        "email": ["a@x.com", "b@x.com"],
+        "name": ["Alice", "Bob"],
+    })
+    matcher = Matcher(left=left, right=right, left_id="id", right_id="id")
+    by_email = matcher.match(on="email")
+    by_name = matcher.match(on="name")
+    combined = by_email.union(by_name)
+    assert combined.count == 2
+    assert "exact_on" in combined.matches.columns
+    assert "exact_on_2" in combined.matches.columns
+    # Same pair (1,10) and (2,20) appear in both; we should see email in exact_on and name in exact_on_2
+    row = combined.matches.filter(pl.col("id") == 1).to_dicts()[0]
+    assert row["exact_on"] == "email"
+    assert row["exact_on_2"] == "name"
+
+
+def test_union_exact_and_fuzzy():
+    """Union of exact and fuzzy results: same pair can have both exact_* and fuzzy_* populated."""
+    left = pl.DataFrame({"id": [1, 2], "email": ["a@x.com", "b@x.com"], "name": ["Alice", "Bob"]})
+    right = pl.DataFrame({"id": [10, 20], "email": ["a@x.com", "c@x.com"], "name": ["Alice", "Charlie"]})
+    matcher = Matcher(left=left, right=right, left_id="id", right_id="id")
+    exact_r = matcher.match(on="email")
+    fuzzy_r = matcher.match(on="name", matching_algorithm=FuzzyMatcher(threshold=0.8))
+    combined = exact_r.union(fuzzy_r)
+    # At least the exact match (1,10) and possibly fuzzy matches
+    assert combined.count >= 1
+    assert "exact_score" in combined.matches.columns
+    assert "fuzzy_score" in combined.matches.columns
+    assert "exact_on" in combined.matches.columns
+    assert "fuzzy_on" in combined.matches.columns
+
+
+def test_match_empty_when_blocking_has_no_common_keys():
+    """No blocks (blocking_key has no common values) returns empty MatchResults with provenance columns."""
+    left = pl.DataFrame({"id": [1, 2], "email": ["a@x.com", "b@x.com"], "zip": [1, 2]})
+    right = pl.DataFrame({"id": [10, 20], "email": ["a@x.com", "c@x.com"], "zip": [9, 9]})
+    matcher = Matcher(left=left, right=right, left_id="id", right_id="id")
+    result = matcher.match(on="email", blocking_key="zip")  # zip 1,2 vs 9,9 -> no common blocks
+    assert result.count == 0
+    assert "exact_score" in result.matches.columns
+    assert "exact_on" in result.matches.columns
+
+
+def test_union_empty_with_non_empty():
+    """Union with empty MatchResults yields the non-empty result's pairs."""
+    left_b = pl.DataFrame({"id": [1, 2], "email": ["a@x.com", "b@x.com"], "zip": [1, 2]})
+    right_b = pl.DataFrame({"id": [10, 20], "email": ["a@x.com", "c@x.com"], "zip": [9, 9]})
+    matcher_b = Matcher(left=left_b, right=right_b, left_id="id", right_id="id")
+    full = matcher_b.match(on="email")
+    empty = matcher_b.match(on="email", blocking_key="zip")  # zip 1,2 vs 9,9 -> no common blocks
+    combined = full.union(empty)
+    assert combined.count == full.count
+    combined2 = empty.union(full)
+    assert combined2.count == full.count
+
+
+def test_union_all_empty():
+    """Union of all empty MatchResults yields empty with schema from self."""
+    left = pl.DataFrame({"id": [1, 2], "email": ["a@x.com", "b@x.com"], "zip": [1, 2]})
+    right = pl.DataFrame({"id": [10, 20], "email": ["x@x.com", "y@x.com"], "zip": [9, 9]})
+    matcher = Matcher(left=left, right=right, left_id="id", right_id="id")
+    empty1 = matcher.match(on="email", blocking_key="zip")
+    empty2 = matcher.match(on="email", blocking_key="zip")
+    combined = empty1.union(empty2)
+    assert combined.count == 0
+    assert "exact_score" in combined.matches.columns or combined.matches.width >= 2
+
+
+def test_union_requires_same_source():
+    """union() raises when MatchResults come from different matchers."""
+    left = pl.DataFrame({"id": [1], "email": ["a@x.com"]})
+    right = pl.DataFrame({"id": [10], "email": ["a@x.com"]})
+    m1 = Matcher(left=left, right=right, left_id="id", right_id="id")
+    m2 = Matcher(left=left, right=right, left_id="id", right_id="id")
+    r1 = m1.match(on="email")
+    r2 = m2.match(on="email")
+    with pytest.raises(ValueError, match="same source"):
+        r1.union(r2)
