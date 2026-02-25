@@ -48,7 +48,41 @@ from typing import Union, Optional, TYPE_CHECKING
 if TYPE_CHECKING:
     from matcher.results import MatchResults
 
-from matcher.algorithms import MatchingAlgorithm, ExactMatcher, FuzzyMatcher
+from matcher.algorithms import (
+    MatchingAlgorithm,
+    ExactMatcher,
+    FuzzyMatcher,
+    score_on_columns_for_kind,
+)
+
+
+def _add_provenance_columns(
+    df: DataFrame,
+    on: Union[str, list[str]],
+    algo: MatchingAlgorithm,
+) -> DataFrame:
+    """Add this algorithm's score and on columns only (from algo.kind). No-op if algo has no kind."""
+    kind = getattr(algo, "kind", None)
+    if kind is None:
+        return df
+    score_col, on_col = score_on_columns_for_kind(kind)
+    n = df.height
+    if n == 0:
+        return df.with_columns([
+            pl.Series(score_col, [], dtype=pl.Float64),
+            pl.Series(on_col, [], dtype=pl.Object),
+        ])
+    source = getattr(algo, "source_score_column", None)
+    score_expr = (
+        pl.col(source).alias(score_col)
+        if source and source in df.columns
+        else pl.lit(1.0).alias(score_col)
+    )
+    on_expr = pl.Series(on_col, [on] * n, dtype=pl.Object)
+    out = df.with_columns([score_expr, on_expr])
+    if kind == "fuzzy" and score_col in out.columns:
+        out = out.with_columns(pl.col(score_col).alias("confidence"))
+    return out
 
 
 class Matcher:
@@ -157,21 +191,17 @@ class Matcher:
             all_matches.append(rule_matches)
 
         if not all_matches:
-            if matching_algorithm is not None and isinstance(matching_algorithm, FuzzyMatcher):
-                return self._empty_fuzzy_result()
-            # Build empty result schema: use first left column only when IDs differ (must exist on right).
-            if self.left_id == self.right_id and self.left_id in self.right.columns:
-                join_col = self.left_id
-            else:
-                join_col = self.left.columns[0] if self.left.columns else self.left_id
-                if join_col not in self.right.columns:
-                    raise ValueError(
-                        f"Cannot build empty result: left column '{join_col}' not in right. "
-                        f"Right columns: {list(self.right.columns)}"
-                    )
-            empty_result = self.left.join(self.right, on=join_col, how="inner").filter(pl.lit(False))
+            # No blocks to process (e.g. blocking had no common keys). Ask the algorithm
+            # for an empty result with its schema instead of special-casing in matcher.
+            empty_left = self.left.filter(pl.lit(False))
+            empty_right = self.right.filter(pl.lit(False))
+            empty_result = algo.match(
+                empty_left, empty_right, rule_list, self.left_id, self.right_id
+            )
+            empty_result = _add_provenance_columns(empty_result, on, algo)
             return MatchResults(empty_result, original_left=self.left, source=self)
         combined = self._combine_matches(self.left, self.right, all_matches)
+        combined = _add_provenance_columns(combined, on, algo)
         return MatchResults(combined, original_left=self.left, source=self)
 
     def _normalize_blocking_keys(
@@ -335,6 +365,12 @@ class Matcher:
             cols_to_drop = [c for c in ["left_id", "right_id"] if c in result.columns]
             if cols_to_drop:
                 result = result.drop(cols_to_drop)
+            # Preserve confidence from algorithm output (e.g. FuzzyMatcher) for backward compatibility
+            for m in all_matches:
+                if "confidence" in m.columns and self.left_id in m.columns and right_id_right in m.columns:
+                    conf = m.select(pl.col(self.left_id), pl.col(right_id_right), pl.col("confidence"))
+                    result = result.join(conf, on=[self.left_id, right_id_right], how="left")
+                    break
             all_results.append(result)
 
         # Add direct matches (no id columns)
@@ -359,31 +395,3 @@ class Matcher:
                 final_result = combined.unique()
 
         return final_result
-
-    def _empty_fuzzy_result(self) -> "MatchResults":
-        """Return MatchResults with zero rows and schema compatible with non-empty fuzzy results."""
-        from matcher.results import MatchResults
-        empty_pairs = pl.DataFrame(
-            {self.left_id: [], "_right_id_val": [], "confidence": []},
-            schema={
-                self.left_id: self.left.schema[self.left_id],
-                "_right_id_val": self.right.schema[self.right_id],
-                "confidence": pl.Float64,
-            },
-        )
-        right_id_right = f"{self.right_id}_right"
-        right_with_suffix = self.right.with_columns(
-            pl.col(self.right_id).alias(right_id_right)
-        )
-        result = (
-            empty_pairs.join(self.left, on=self.left_id, how="left")
-            .join(
-                right_with_suffix,
-                left_on="_right_id_val",
-                right_on=self.right_id,
-                how="left",
-                suffix="_right",
-            )
-            .drop("_right_id_val")
-        )
-        return MatchResults(result, original_left=self.left, source=self)

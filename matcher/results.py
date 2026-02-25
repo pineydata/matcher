@@ -34,6 +34,7 @@ Key Methods:
 - count: Property returning the number of matches
 - pipe(): Chain arbitrary DataFrame transformations
 - refine(): Apply additional matching rules to unmatched records
+- union(): Combine with other MatchResults (same source); pair set is union, score/on merged (first non-null wins)
 - evaluate(): Compare matches against ground truth and return metrics
 - sample(): Return a random sample of matches (for review or inspection)
 - export_for_review(): Export matches to CSV for human review (Phase 4)
@@ -276,6 +277,12 @@ class MatchResults:
                 right_id=right_id
             )
 
+        # Add this algorithm's score/on columns to new matches (for union/provenance)
+        from matcher.matcher import _add_provenance_columns
+        from matcher.algorithms import is_score_on_column
+        algo = actual_matcher.matching_algorithm
+        new_matches = _add_provenance_columns(new_matches, on, algo)
+
         # Combine by (left_id, right_id_right) then rejoin to get consistent schema
         # (algorithm may return different columns for different rules, e.g. multi-field join)
         if new_matches.height > 0:
@@ -303,6 +310,30 @@ class MatchResults:
             to_drop = [c for c in ["_lid", "_rid"] if c in combined.columns]
             if to_drop:
                 combined = combined.drop(to_drop)
+            # Discover score/on columns from both sides; merge (first non-null wins per pair)
+            score_on_cols = [c for c in new_matches.columns if is_score_on_column(c)]
+            if score_on_cols:
+                new_scores = new_matches.select([left_id, right_id_right] + score_on_cols)
+                combined = combined.join(new_scores, on=[left_id, right_id_right], how="left", suffix="_new")
+                existing_score_on = [c for c in self.matches.columns if is_score_on_column(c)]
+                if existing_score_on:
+                    existing_scores = self.matches.select([left_id, right_id_right] + existing_score_on)
+                    combined = combined.join(existing_scores, on=[left_id, right_id_right], how="left", suffix="_ex")
+                    for col in set(score_on_cols) | set(existing_score_on):
+                        ex_col, new_col = f"{col}_ex", f"{col}_new"
+                        if ex_col in combined.columns and new_col in combined.columns:
+                            combined = combined.with_columns(
+                                pl.coalesce(pl.col(ex_col), pl.col(new_col)).alias(col)
+                            )
+                        elif new_col in combined.columns:
+                            combined = combined.with_columns(pl.col(new_col).alias(col))
+                        elif ex_col in combined.columns:
+                            combined = combined.with_columns(pl.col(ex_col).alias(col))
+                    combined = combined.drop([c for c in combined.columns if c.endswith("_ex") or c.endswith("_new")])
+                else:
+                    for col in score_on_cols:
+                        combined = combined.with_columns(pl.col(f"{col}_new").alias(col))
+                    combined = combined.drop([f"{c}_new" for c in score_on_cols])
         else:
             combined = self.matches
 
@@ -312,6 +343,120 @@ class MatchResults:
                 combined = combined.filter(
                     pl.col(left_id) != pl.col(right_id_right)
                 )
+
+        return MatchResults(combined, self._original_left, self._source)
+
+    def union(self, *others: "MatchResults") -> "MatchResults":
+        """Combine this MatchResults with one or more others; pair set is the union, deduplicated.
+
+        All inputs must share the same original_left and same right (same matcher/source)
+        and same ID column names. Score/on columns are preserved per run: when the same
+        algorithm type (e.g. exact) appears in multiple inputs, the first run gets
+        exact_score/exact_on, the second gets exact_score_2/exact_on_2, and so on.
+        No coalescing: you see every run's values and can apply your own rule.
+
+        Returns:
+            New MatchResults with rows = union of (left_id, right_id_right), canonical
+            left + right columns, and score/on columns (with _2, _3 suffixes for
+            multiple runs of the same algorithm type). Nulls where a pair did not
+            appear in that run.
+        """
+        from collections import defaultdict
+
+        from matcher.algorithms import kind_of_score_on_column
+        from matcher.deduplicator import Deduplicator
+
+        all_results = [self] + list(others)
+        if not all_results:
+            return MatchResults(self.matches, self._original_left, self._source)
+
+        # Require same source so we have same right and ID names
+        source = self._source
+        if source is None:
+            raise ValueError(
+                "union() requires a matcher/source on all MatchResults (from matcher.match() or deduplicator.match())."
+            )
+        for i, r in enumerate(all_results):
+            if r._source is not source:
+                raise ValueError(
+                    "union() requires all MatchResults to share the same source (same matcher/deduplicator)."
+                )
+            if r._original_left is not self._original_left:
+                raise ValueError(
+                    "union() requires all MatchResults to share the same original_left."
+                )
+
+        if isinstance(source, Deduplicator):
+            left_id = source._id_col
+            right_id = source._id_col
+            right_df = source._matcher.right
+        else:
+            left_id = source.left_id
+            right_id = source.right_id
+            right_df = source.right
+        right_id_right = f"{right_id}_right"
+
+        # Require ID columns in all
+        for r in all_results:
+            if left_id not in r.matches.columns or right_id_right not in r.matches.columns:
+                raise ValueError(
+                    f"union() requires matches to have '{left_id}' and '{right_id_right}' columns."
+                )
+
+        # Union of pairs (deduplicate by left_id, right_id_right)
+        pair_dfs = [
+            r.matches.select(pl.col(left_id).alias("_lid"), pl.col(right_id_right).alias("_rid"))
+            for r in all_results
+        ]
+        combined_pairs = pl.concat(pair_dfs).unique(subset=["_lid", "_rid"])
+
+        if combined_pairs.height == 0:
+            # All empty: return empty with same schema as self (canonical + any score/on)
+            return MatchResults(self.matches, self._original_left, self._source)
+
+        # Rejoin to get canonical left + right columns
+        right_with_suffix = right_df.with_columns(pl.col(right_id).alias(right_id_right))
+        combined = self._original_left.join(
+            combined_pairs, left_on=left_id, right_on="_lid", how="inner"
+        ).join(
+            right_with_suffix,
+            left_on="_rid",
+            right_on=right_id,
+            how="inner",
+            suffix="_right",
+        )
+        to_drop = [c for c in ["_lid", "_rid"] if c in combined.columns]
+        if to_drop:
+            combined = combined.drop(to_drop)
+
+        # Group by algorithm kind: for each kind, ordered list of result indices that have it
+        runs_per_kind = defaultdict(list)
+        for i, r in enumerate(all_results):
+            kinds_in_r = set()
+            for c in r.matches.columns:
+                k = kind_of_score_on_column(c)
+                if k and f"{k}_score" in r.matches.columns and f"{k}_on" in r.matches.columns:
+                    kinds_in_r.add(k)
+            for k in kinds_in_r:
+                runs_per_kind[k].append(i)
+
+        # For each (kind, run_index j), add columns: first run -> kind_score, kind_on; later -> kind_score_2, kind_on_2, ...
+        for kind in sorted(runs_per_kind.keys()):
+            result_indices = runs_per_kind[kind]
+            score_col = f"{kind}_score"
+            on_col = f"{kind}_on"
+            for j, result_idx in enumerate(result_indices):
+                suffix = "" if j == 0 else f"_{j + 1}"  # first run unsuffixed, then _2, _3, ...
+                target_score = score_col + suffix
+                target_on = on_col + suffix
+                r = all_results[result_idx]
+                sub = r.matches.select(
+                    pl.col(left_id),
+                    pl.col(right_id_right),
+                    pl.col(score_col).alias(target_score),
+                    pl.col(on_col).alias(target_on),
+                )
+                combined = combined.join(sub, on=[left_id, right_id_right], how="left")
 
         return MatchResults(combined, self._original_left, self._source)
 

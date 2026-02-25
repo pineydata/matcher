@@ -31,8 +31,36 @@ from abc import ABC, abstractmethod
 from typing import Optional
 
 
+def score_on_columns_for_kind(kind: str) -> tuple[str, str]:
+    """Return (score_column, on_column) for an algorithm kind (e.g. 'exact', 'fuzzy').
+
+    Used so matcher/results can add provenance columns without hardcoding names.
+    New algorithm types (e.g. 'phonetic') get columns phonetic_score, phonetic_on.
+    """
+    return (f"{kind}_score", f"{kind}_on")
+
+
+def is_score_on_column(name: str) -> bool:
+    """True if name is a provenance score or on column (*_score or *_on)."""
+    return name.endswith("_score") or name.endswith("_on")
+
+
+def kind_of_score_on_column(name: str) -> Optional[str]:
+    """Return the algorithm kind for a score/on column (e.g. 'exact_score' -> 'exact')."""
+    if name.endswith("_score"):
+        return name[:-6]
+    if name.endswith("_on"):
+        return name[:-3]
+    return None
+
+
 class MatchingAlgorithm(ABC):
     """Base class for matching algorithms - in-memory only."""
+
+    # Optional: set in subclasses for provenance (score/on columns). None => no score/on added.
+    kind: Optional[str] = None
+    # If set, use this column from match() output as the score (e.g. 'confidence'); else use 1.0.
+    source_score_column: Optional[str] = None
 
     @abstractmethod
     def match(
@@ -66,6 +94,9 @@ class ExactMatcher(MatchingAlgorithm):
 
     Parallelization is handled internally by Polars (joins are parallelized).
     """
+
+    kind = "exact"
+    source_score_column = None
 
     def __init__(self):
         """Initialize ExactMatcher."""
@@ -134,6 +165,9 @@ class FuzzyMatcher(MatchingAlgorithm):
     match with FuzzyMatcher then filter or require_exact on MatchResults (composition).
     Rows where the field is null are excluded. Returns matches with a 'confidence' column.
     """
+
+    kind = "fuzzy"
+    source_score_column = "confidence"
 
     def __init__(self, threshold: float = 0.85):
         """Initialize with similarity threshold in [0, 1]."""
