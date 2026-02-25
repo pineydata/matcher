@@ -19,7 +19,7 @@ Usage Pattern:
     >>> import polars as pl
     >>>
     >>> matcher = Matcher(left=left_df, right=right_df, left_id="id", right_id="id")
-    >>> results = matcher.match(rules="email")
+    >>> results = matcher.match(on="email")
     >>>
     >>> ground_truth = pl.DataFrame({
     ...     "left_id": ["left_1", "left_2"],
@@ -190,7 +190,7 @@ def find_best_threshold(
     a threshold from data instead of guessing (e.g. 0.85).
 
     Args:
-        matches: DataFrame of fuzzy matches with a 'confidence' column (from match_fuzzy).
+        matches: DataFrame of fuzzy matches with a 'confidence' column (from match with FuzzyMatcher).
         ground_truth: DataFrame with left_id and right_id columns (known true pairs).
         left_id_col: Column name for left ID in matches (default: "id").
         right_id_col: Column name for right ID in matches (default: "id" or "id_right").
@@ -205,13 +205,13 @@ def find_best_threshold(
 
     Example:
         >>> # Run fuzzy with a low threshold so you have scored pairs to sweep
-        >>> results = matcher.match_fuzzy(field="name", threshold=0.5)
+        >>> results = matcher.match(on=["name"], matching_algorithm=FuzzyMatcher(threshold=0.5))
         >>> best = find_best_threshold(results.matches, ground_truth, right_id_col="id_right")
         >>> print(f"Best threshold: {best['best_threshold']}, F1: {best['best_f1']:.2%}")
     """
     if "confidence" not in matches.columns:
         raise ValueError(
-            "find_best_threshold requires a 'confidence' column (use match_fuzzy results). "
+            "find_best_threshold requires a 'confidence' column (use match with FuzzyMatcher results). "
             f"Columns: {matches.columns}"
         )
     if evaluator is None:

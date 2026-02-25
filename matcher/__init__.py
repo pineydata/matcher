@@ -1,6 +1,6 @@
 """matcher: A cozy, comfortable library for entity resolution and deduplication."""
 
-from matcher.algorithms import MatchingAlgorithm, ExactMatcher
+from matcher.algorithms import MatchingAlgorithm, ExactMatcher, FuzzyMatcher
 from matcher.matcher import Matcher
 from matcher.deduplicator import Deduplicator
 from matcher.evaluators import Evaluator, SimpleEvaluator, find_best_threshold
@@ -12,6 +12,7 @@ __all__ = [
     "MatchResults",
     "MatchingAlgorithm",
     "ExactMatcher",
+    "FuzzyMatcher",
     "Evaluator",
     "SimpleEvaluator",
     "find_best_threshold",

@@ -18,18 +18,17 @@ Usage Pattern:
     >>>
     >>> df = pl.read_parquet("customers.parquet")
     >>> deduplicator = Deduplicator(source=df, id_col="id")
-    >>> results = deduplicator.match(rules="email")
+    >>> results = deduplicator.match(on="email")
     >>> print(f"Found {results.count} duplicate pairs")
-    >>> # Fuzzy deduplication (e.g. names with typos)
-    >>> fuzzy_results = deduplicator.match_fuzzy(field="name", threshold=0.85)
+    >>> # Fuzzy: pass FuzzyMatcher for this call
+    >>> from matcher import FuzzyMatcher
+    >>> fuzzy_results = deduplicator.match(on=["name"], matching_algorithm=FuzzyMatcher(threshold=0.85))
 
 Differences from Matcher:
 - Takes a single source DataFrame instead of left/right
 - Uses id_col for both left_id and right_id
 - Automatically filters self-matches (where id == id_right)
-- Same rule syntax and matching logic as Matcher
-- Optional blocking_key on match() and match_fuzzy() for performance (same as Matcher)
-- match_fuzzy() delegates to Matcher.match_fuzzy() and filters self-matches
+- Same match() API: on, blocking_key, matching_algorithm (single entry point)
 
 Dependencies:
 - Uses Matcher (from matcher.matcher) internally for matching logic
@@ -38,7 +37,7 @@ Dependencies:
 """
 
 from polars import DataFrame
-from typing import Union, Optional, List
+from typing import Union, Optional
 from matcher.algorithms import MatchingAlgorithm
 from matcher.matcher import Matcher
 from matcher.results import MatchResults
@@ -82,86 +81,29 @@ class Deduplicator:
 
     def match(
         self,
-        rules: Union[str, list[str], list[Union[str, list[str]]]],
-        blocking_key: Optional[Union[str, List[Optional[str]]]] = None
+        on: Union[str, list[str]],
+        blocking_key: Optional[Union[str, list[str]]] = None,
+        matching_algorithm: Optional[MatchingAlgorithm] = None,
     ) -> MatchResults:
-        """Perform deduplication using the configured matching algorithm.
+        """Perform deduplication for a single rule. Self-matches are filtered out.
 
-        Rules are processed sequentially and combined with OR logic.
-        Optional blocking_key restricts comparisons to records with the same
-        value in that column (e.g. zip_code), reducing work for large sources.
+        Same API as Matcher.match(): single rule (on=), optional blocking_key (str or list[str]), optional
+        matching_algorithm. For cascading, chain with .refine(on=...) on the result.
 
         Args:
-            rules: Matching rule(s). Can be:
-                  - Single field (str): "email"
-                  - Single rule with one field (list[str]): ["email"]
-                  - Single rule with multiple fields (list[str]): ["first_name", "last_name"]
-                  - Multiple rules (list): ["email", ["first_name", "last_name"]]
-
-                  Records match if ANY rule matches (OR logic).
-                  Within a rule, all fields must match together (AND logic).
-            blocking_key: Optional. Same as Matcher: str for one key for all rules, or
-                          list of str or None (one per rule). See Matcher.match().
+            on: Single rule (str or list[str]).
+            blocking_key: Optional column name or list of names.
+            matching_algorithm: Optional (e.g. FuzzyMatcher(threshold=0.85)).
 
         Returns:
-            MatchResults object with duplicate pairs (self-matches filtered out)
-
-        Examples:
-            >>> results = deduplicator.match(rules="email")
-            >>> results = deduplicator.match(rules="email", blocking_key="zip_code")
-            >>> results = deduplicator.match(rules=[["email"], ["name"]], blocking_key=["zip_code", "state"])
+            MatchResults with duplicate pairs (self-matches excluded).
         """
         id_col_right = f"{self._id_col}_right"
-        normalized = self._matcher._normalize_rules(rules)
-
-        if len(normalized) == 1:
-            results = self._matcher.match(rules=rules, blocking_key=blocking_key)
-            filtered_matches = results.matches.filter(
-                pl.col(self._id_col) != pl.col(id_col_right)
-            )
-            return MatchResults(filtered_matches, original_left=self._matcher.left, source=self)
-
-        # Multi-rule: run first rule, filter self-matches, then cascade refines.
-        # (Matcher would treat left=right as all "matched" on the first rule, so we'd get no refines.)
-        first_bk = blocking_key[0] if isinstance(blocking_key, list) else blocking_key
-        first_results = self._matcher.match(rules=normalized[0], blocking_key=first_bk)
-        filtered_matches = first_results.matches.filter(
-            pl.col(self._id_col) != pl.col(id_col_right)
+        results = self._matcher.match(
+            on=on,
+            blocking_key=blocking_key,
+            matching_algorithm=matching_algorithm,
         )
-        results = MatchResults(filtered_matches, original_left=self._matcher.left, source=self)
-        for i, rule in enumerate(normalized[1:]):
-            bk = blocking_key[i + 1] if isinstance(blocking_key, list) else blocking_key if blocking_key is not None else None
-            results = results.refine(rule=rule, blocking_key=bk)
-        return results
-
-    def match_fuzzy(
-        self,
-        field: str,
-        threshold: float = 0.85,
-        blocking_key: Optional[str] = None
-    ) -> MatchResults:
-        """Fuzzy deduplication on a single string field using Jaro-Winkler similarity.
-
-        Delegates to Matcher.match_fuzzy() then filters out self-matches
-        (where id_col == id_col_right). Optional blocking_key runs fuzzy only
-        within blocks to reduce memory and comparisons.
-
-        Args:
-            field: Single column name to match on (string values).
-            threshold: Minimum similarity in [0, 1] to count as a match (default 0.85).
-            blocking_key: Optional column name to restrict comparisons to same block.
-
-        Returns:
-            MatchResults with duplicate pairs and 'confidence' column (self-matches excluded).
-
-        Example:
-            >>> results = deduplicator.match_fuzzy(field="name", threshold=0.85)
-            >>> results = deduplicator.match_fuzzy(field="name", blocking_key="zip_code")
-        """
-        results = self._matcher.match_fuzzy(
-            field=field, threshold=threshold, blocking_key=blocking_key
-        )
-        id_col_right = f"{self._id_col}_right"
         filtered_matches = results.matches.filter(
             pl.col(self._id_col) != pl.col(id_col_right)
         )

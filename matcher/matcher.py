@@ -13,12 +13,11 @@ Key Concepts:
   - Multiple rules: ["email", ["first_name", "last_name"]] (match if ANY rule matches)
 - Rule Logic: Within a rule, all fields must match (AND logic). Across rules, any
   rule can match (OR logic).
-- Blocking: Optional blocking_key (e.g. "zip_code") restricts candidate pairs to
-  records that share the same blocking key value, reducing comparisons and memory.
-  On match(), blocking_key can be a list (one per rule) for different blocking per rule.
-  Supported on match() and match_fuzzy().
-- Fuzzy Matching: match_fuzzy() uses Jaro-Winkler similarity (via rapidfuzz) for
-  typo-tolerant matching on a single string field, with a configurable threshold.
+- Blocking: Optional blocking_key (str or list[str], e.g. "zip_code" or ["zip_code", "state"])
+  restricts candidate pairs to records that share the same value(s). One rule per match(); cascade via .refine().
+- Matching algorithm: Pass an algorithm at construction or per call. Default is ExactMatcher.
+  Use FuzzyMatcher(threshold=0.85) for fuzzy (Jaro-Winkler) on a single string field.
+  Fuzzy + exact on another column: match with FuzzyMatcher then filter or require_exact (composition).
 
 Usage Pattern:
     >>> from matcher import Matcher
@@ -28,12 +27,13 @@ Usage Pattern:
     >>> right_df = pl.read_parquet("customers_b.parquet")
     >>>
     >>> matcher = Matcher(left=left_df, right=right_df, left_id="id", right_id="id")
-    >>> results = matcher.match(rules="email")
+    >>> results = matcher.match(on="email")
     >>> print(f"Found {results.count} matches")
     >>> # With blocking for large datasets
-    >>> results = matcher.match(rules="email", blocking_key="zip_code")
-    >>> # Fuzzy matching for names with typos
-    >>> fuzzy_results = matcher.match_fuzzy(field="name", threshold=0.85)
+    >>> results = matcher.match(on="email", blocking_key="zip_code")
+    >>> # Fuzzy: pass FuzzyMatcher for this call
+    >>> from matcher import FuzzyMatcher
+    >>> fuzzy_results = matcher.match(on=["name"], matching_algorithm=FuzzyMatcher(threshold=0.85))
 
 Dependencies:
 - Uses MatchingAlgorithm components (from matcher.algorithms) to perform actual matching
@@ -43,12 +43,12 @@ Dependencies:
 
 import polars as pl
 from polars import DataFrame
-from typing import Union, Optional, List, TYPE_CHECKING
+from typing import Union, Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from matcher.results import MatchResults
 
-from matcher.algorithms import MatchingAlgorithm, ExactMatcher
+from matcher.algorithms import MatchingAlgorithm, ExactMatcher, FuzzyMatcher
 
 
 class Matcher:
@@ -109,102 +109,57 @@ class Matcher:
 
     def match(
         self,
-        rules: Union[str, list[str], list[Union[str, list[str]]]],
-        blocking_key: Optional[Union[str, List[Optional[str]]]] = None
+        on: Union[str, list[str]],
+        blocking_key: Optional[Union[str, list[str]]] = None,
+        matching_algorithm: Optional[MatchingAlgorithm] = None,
     ) -> "MatchResults":
-        """Perform matching using the configured matching algorithm.
+        """Perform matching on a single rule using the configured or passed algorithm.
 
-        With multiple rules, uses cascading semantics: try the first rule on the full
-        dataset; then try the next rule only on left rows that did not match yet; and
-        so on. Each left row is matched at most once (first rule that fires wins).
-        This is deterministic and efficient—once a left row has a match, we stop
-        looking. For a single rule, runs that rule only.
-
-        Optional blocking restricts candidate pairs to records that share the same
-        blocking_key value (e.g. zip_code). When blocking_key is a string, blocking
-        applies to all rules; when blocking_key is a list, each rule can have its own
-        blocking key (or None for no blocking on that rule).
+        Only one rule per call. For cascading (try another rule on unmatched rows),
+        chain with .refine(on=...) on the returned MatchResults.
 
         Args:
-            rules: Matching rule(s). Can be:
-                  - Single field (str): "email"
-                  - Single rule with one field (list[str]): ["email"]
-                  - Single rule with multiple fields (list[str]): ["first_name", "last_name"]
-                  - Multiple rules (list): ["email", ["first_name", "last_name"]]
-
-                  With multiple rules: cascading (first rule, then next for unmatched, etc.).
-                  Within a rule, all fields must match together (AND logic).
-            blocking_key: Optional. When set, only records with the same value in the blocking
-                          column(s) are compared. Can be:
-                          - str: one column name used for all rules (e.g. "zip_code").
-                          - list of str or None: one entry per rule; blocking_key[i] is the
-                            column for rule i, or None for no blocking on that rule. Length
-                            must match the number of rules.
+            on: What to match on. One field (str) or multiple fields (list[str]) that
+                must all match together (AND), e.g. "email" or ["first_name", "last_name"].
+            blocking_key: Optional column name or list of names. Only records with the same value(s) are compared.
+            matching_algorithm: Optional. Use this algorithm (e.g. FuzzyMatcher).
+                               refine() uses the matcher's default algorithm.
 
         Returns:
-            MatchResults object with matches
+            MatchResults for this rule only.
 
         Examples:
-            >>> # Single field
-            >>> results = matcher.match(rules="email")
-            >>> # With blocking for performance
-            >>> results = matcher.match(rules="email", blocking_key="zip_code")
-            >>> # Multiple rules: cascading (email first, then name for unmatched)
-            >>> results = matcher.match(rules=[
-            ...     "email",
-            ...     ["first_name", "last_name"]
-            ... ])
-            >>> # Per-rule blocking: email within zip_code, then name within state for unmatched
-            >>> results = matcher.match(rules=["email", ["first_name", "last_name"]],
-            ...                        blocking_key=["zip_code", "state"])
+            >>> results = matcher.match(on="email")
+            >>> results = matcher.match(on="email", blocking_key="zip_code")
+            >>> results = matcher.match(on="email", blocking_key=["zip_code", "state"])
+            >>> # Cascade: email first, then name for unmatched
+            >>> results = matcher.match(on="email").refine(on=["first_name", "last_name"])
         """
-        # Normalize rules to list of lists
-        normalized_rules = self._normalize_rules(rules)
+        algo = matching_algorithm if matching_algorithm is not None else self.matching_algorithm
+        rule_list = self._normalize_single_rule(on)
+        keys = self._normalize_blocking_keys(blocking_key)
 
-        # Validate all fields exist (including blocking_key if provided)
-        self._validate_fields(self.left, self.right, normalized_rules)
-        if blocking_key is not None:
-            if isinstance(blocking_key, str):
-                self._validate_fields(
-                    self.left, self.right, [[blocking_key]]
-                )
-            else:
-                if len(blocking_key) != len(normalized_rules):
-                    raise ValueError(
-                        f"blocking_key list length ({len(blocking_key)}) must equal "
-                        f"number of rules ({len(normalized_rules)})"
-                    )
-                unique_keys = {k for k in blocking_key if k is not None}
-                for key in unique_keys:
-                    self._validate_fields(
-                        self.left, self.right, [[key]]
-                    )
+        self._validate_fields(self.left, self.right, [rule_list])
+        if keys is not None:
+            self._validate_fields(self.left, self.right, [keys])
 
-        # Import here to avoid circular dependency
         from matcher.results import MatchResults
 
-        # Process first rule only (with blocking if any). Further rules use cascading via refine().
-        first_rule = normalized_rules[0]
-        if blocking_key is None:
+        if keys is None:
             blocks_for_rule = [(self.left, self.right)]
-        elif isinstance(blocking_key, str):
-            blocks_for_rule = self._block_pairs(blocking_key)
         else:
-            bk = blocking_key[0]
-            blocks_for_rule = (
-                [(self.left, self.right)]
-                if bk is None
-                else self._block_pairs(bk)
-            )
+            blocks_for_rule = self._block_pairs(keys)
         all_matches = []
         for left_block, right_block in blocks_for_rule:
-            rule_matches = self.matching_algorithm.match(
-                left_block, right_block, first_rule, self.left_id, self.right_id
+            rule_matches = algo.match(
+                left_block, right_block, rule_list, self.left_id, self.right_id
             )
             all_matches.append(rule_matches)
 
         if not all_matches:
-            # Empty result with same schema as non-empty
+            if matching_algorithm is not None and isinstance(matching_algorithm, FuzzyMatcher):
+                return self._empty_fuzzy_result()
+            # Build empty result schema: use first left column only when IDs differ (must exist on right).
             if self.left_id == self.right_id and self.left_id in self.right.columns:
                 join_col = self.left_id
             else:
@@ -215,81 +170,104 @@ class Matcher:
                         f"Right columns: {list(self.right.columns)}"
                     )
             empty_result = self.left.join(self.right, on=join_col, how="inner").filter(pl.lit(False))
-            results = MatchResults(empty_result, original_left=self.left, source=self)
-        else:
-            first_result = self._combine_matches(self.left, self.right, all_matches)
-            results = MatchResults(first_result, original_left=self.left, source=self)
+            return MatchResults(empty_result, original_left=self.left, source=self)
+        combined = self._combine_matches(self.left, self.right, all_matches)
+        return MatchResults(combined, original_left=self.left, source=self)
 
-        # Cascading: apply remaining rules only to unmatched left rows (with optional blocking per rule)
-        for i, rule in enumerate(normalized_rules[1:]):
-            bk = None
-            if blocking_key is not None and isinstance(blocking_key, list):
-                bk = blocking_key[i + 1]  # blocking_key[0] was used for first rule
-            elif blocking_key is not None:
-                bk = blocking_key
-            results = results.refine(rule=rule, blocking_key=bk)
-
-        return results
+    def _normalize_blocking_keys(
+        self, blocking_key: Optional[Union[str, list[str]]]
+    ) -> Optional[list[str]]:
+        """Return None or a non-empty list of column names. Reject empty list."""
+        if blocking_key is None:
+            return None
+        if isinstance(blocking_key, str):
+            return [blocking_key]
+        if isinstance(blocking_key, list) and len(blocking_key) > 0:
+            if all(isinstance(k, str) for k in blocking_key):
+                return list(blocking_key)
+            raise ValueError(
+                "blocking_key must be a column name (str) or list of column names (list[str])"
+            )
+        raise ValueError("blocking_key must be non-empty when provided")
 
     def _paired_blocks_by_key(
         self,
         left_df: DataFrame,
         right_df: DataFrame,
-        blocking_key: str,
+        blocking_key: Union[str, list[str]],
     ) -> list[tuple[DataFrame, DataFrame]]:
-        """Return (left_block, right_block) pairs for each common blocking key value.
+        """Return (left_block, right_block) pairs for each common blocking key value(s).
 
-        Nulls in the blocking key form one block. Used by both exact and fuzzy matching.
+        blocking_key can be one column or a list of columns; a block = same value for all.
+        Nulls: rows where all blocking columns are null form one block.
         """
-        left_vals = left_df.select(blocking_key).unique()
-        right_vals = right_df.select(blocking_key).unique()
-        common = left_vals.join(right_vals, on=blocking_key, how="inner")
-        block_values = common.to_series().to_list()
+        keys = [blocking_key] if isinstance(blocking_key, str) else list(blocking_key)
+        left_vals = left_df.select(keys).unique()
+        right_vals = right_df.select(keys).unique()
+        common = left_vals.join(right_vals, on=keys, how="inner")
 
-        # Inner join excludes nulls; add null block when both sides have nulls
-        left_has_nulls = left_df.select(pl.col(blocking_key).is_null().any()).item()
-        right_has_nulls = right_df.select(pl.col(blocking_key).is_null().any()).item()
-        if left_has_nulls and right_has_nulls:
-            block_values.append(None)
-
+        # Build (left_block, right_block) for each row in common
         pairs = []
-        for block_val in block_values:
-            if block_val is None:
-                left_b = left_df.filter(pl.col(blocking_key).is_null())
-                right_b = right_df.filter(pl.col(blocking_key).is_null())
+        for row in common.iter_rows(named=True):
+            block_vals = [row[k] for k in keys]
+            if all(v is None for v in block_vals):
+                left_b = left_df.filter(
+                    pl.all_horizontal(pl.col(k).is_null() for k in keys)
+                )
+                right_b = right_df.filter(
+                    pl.all_horizontal(pl.col(k).is_null() for k in keys)
+                )
             else:
-                left_b = left_df.filter(pl.col(blocking_key) == block_val)
-                right_b = right_df.filter(pl.col(blocking_key) == block_val)
+                pred_left = pl.all_horizontal(
+                    pl.col(k) == v for k, v in zip(keys, block_vals)
+                )
+                pred_right = pl.all_horizontal(
+                    pl.col(k) == v for k, v in zip(keys, block_vals)
+                )
+                left_b = left_df.filter(pred_left)
+                right_b = right_df.filter(pred_right)
             pairs.append((left_b, right_b))
+
+        # Add null block when both sides have rows with all blocking keys null
+        null_pred = pl.all_horizontal(pl.col(k).is_null() for k in keys)
+        left_has_nulls = left_df.filter(null_pred).height > 0
+        right_has_nulls = right_df.filter(null_pred).height > 0
+        if left_has_nulls and right_has_nulls:
+            # Only add if not already in common (inner join excludes nulls)
+            left_b = left_df.filter(null_pred)
+            right_b = right_df.filter(null_pred)
+            pairs.append((left_b, right_b))
+
         return pairs
 
-    def _block_pairs(self, blocking_key: str) -> list[tuple[DataFrame, DataFrame]]:
-        """Return list of (left_block, right_block) for each common blocking key value."""
-        return self._paired_blocks_by_key(self.left, self.right, blocking_key)
+    def _block_pairs(
+        self, blocking_key: Union[str, list[str]]
+    ) -> list[tuple[DataFrame, DataFrame]]:
+        """Return list of (left_block, right_block) for each common blocking key value(s)."""
+        keys = [blocking_key] if isinstance(blocking_key, str) else list(blocking_key)
+        return self._paired_blocks_by_key(self.left, self.right, keys)
 
-    def _normalize_rules(self, rules: Union[str, list[str], list[Union[str, list[str]]]]) -> list[list[str]]:
-        """Normalize rules input to list of lists."""
-        if isinstance(rules, str):
-            return [[rules]]
-        elif isinstance(rules, list) and len(rules) > 0:
-            if all(isinstance(item, str) for item in rules):
-                # Single rule with multiple fields: ["email", "zip_code"]
-                return [rules]
-            else:
-                # Multiple rules: ["email", ["first_name", "last_name"]]
-                normalized = []
-                for rule in rules:
-                    if isinstance(rule, str):
-                        normalized.append([rule])
-                    elif isinstance(rule, list):
-                        if len(rule) == 0:
-                            raise ValueError("Each rule must contain at least one field name")
-                        normalized.append(rule)
-                    else:
-                        raise ValueError(f"Each rule must be a string or list, got {type(rule)}")
-                return normalized
-        else:
-            raise ValueError("Rules must be a string, list of strings, or list of rules")
+    def _normalize_single_rule(self, on: Union[str, list]) -> list[str]:
+        """Normalize on= to a single rule as list of field names. Reject multiple rules.
+
+        Accepts: str (one field), list[str] (multiple fields in one rule), or list of one list
+        (e.g. on=[["first_name", "last_name"]] treated as that inner list). Rejects list of
+        multiple lists (multiple rules); use .refine(on=...) for cascading.
+        """
+        if isinstance(on, str):
+            return [on]
+        if isinstance(on, list) and len(on) > 0:
+            if all(isinstance(item, str) for item in on):
+                return on
+            if len(on) == 1 and isinstance(on[0], list):
+                if len(on[0]) == 0:
+                    raise ValueError("on must contain at least one field name")
+                return list(on[0])
+            raise ValueError(
+                "Only a single rule is allowed per match(). "
+                "For cascading (next rule on unmatched), use .refine(on=...) after match()."
+            )
+        raise ValueError("on must be a non-empty string or list of field names")
 
     def _validate_fields(
         self,
@@ -409,165 +387,3 @@ class Matcher:
             .drop("_right_id_val")
         )
         return MatchResults(result, original_left=self.left, source=self)
-
-    def match_fuzzy(
-        self,
-        field: str,
-        threshold: float = 0.85,
-        blocking_key: Optional[str] = None
-    ) -> "MatchResults":
-        """Fuzzy matching on a single string field using Jaro-Winkler similarity.
-
-        Uses batch vectorized similarity (rapidfuzz.process.cdist) with Polars → Arrow
-        → rapidfuzz data flow. Rows where the field is null are excluded from
-        matching (same as exact match: nulls do not match).
-        Optional blocking runs fuzzy only within blocks (same blocking_key value),
-        reducing matrix size and memory for large datasets.
-
-        Args:
-            field: Single column name to match on (string values).
-            threshold: Minimum similarity in [0, 1] to count as a match (default 0.85).
-            blocking_key: Optional column name. When set, only records with the same
-                          value in this column are compared; similarity matrix is built
-                          per block to bound memory.
-
-        Returns:
-            MatchResults with matches including a 'confidence' column (0–1).
-
-        Raises:
-            ValueError: If field is missing in left or right, or threshold not in [0, 1].
-
-        Example:
-            >>> results = matcher.match_fuzzy(field="name", threshold=0.85)
-            >>> results = matcher.match_fuzzy(field="name", blocking_key="zip_code")
-        """
-        if not 0 <= threshold <= 1:
-            raise ValueError(f"threshold must be between 0 and 1, got {threshold}")
-        if field not in self.left.columns:
-            raise ValueError(
-                f"Field '{field}' not found in left source. Available: {self.left.columns}"
-            )
-        if field not in self.right.columns:
-            raise ValueError(
-                f"Field '{field}' not found in right source. Available: {self.right.columns}"
-            )
-        if blocking_key is not None:
-            if blocking_key not in self.left.columns:
-                raise ValueError(
-                    f"blocking_key '{blocking_key}' not found in left source. Available: {self.left.columns}"
-                )
-            if blocking_key not in self.right.columns:
-                raise ValueError(
-                    f"blocking_key '{blocking_key}' not found in right source. Available: {self.right.columns}"
-                )
-
-        # Fuzzy matching requires string columns (we use .str.to_lowercase() etc.)
-        left_dtype = self.left.schema[field]
-        right_dtype = self.right.schema[field]
-        if left_dtype != pl.Utf8:
-            raise ValueError(
-                f"Field '{field}' in left source must be a string (Utf8) column for fuzzy matching, got {left_dtype}"
-            )
-        if right_dtype != pl.Utf8:
-            raise ValueError(
-                f"Field '{field}' in right source must be a string (Utf8) column for fuzzy matching, got {right_dtype}"
-            )
-
-        # Exclude nulls (same semantics as exact match)
-        left_valid = self.left.filter(pl.col(field).is_not_null())
-        right_valid = self.right.filter(pl.col(field).is_not_null())
-        if left_valid.height == 0 or right_valid.height == 0:
-            return self._empty_fuzzy_result()
-
-        # Resolve (left_block, right_block) pairs: one full pair or per-block
-        if blocking_key is None:
-            block_pairs = [(left_valid, right_valid)]
-        else:
-            block_pairs = self._fuzzy_block_pairs(left_valid, right_valid, blocking_key)
-
-        all_pairs = []
-        for left_block, right_block in block_pairs:
-            if left_block.height == 0 or right_block.height == 0:
-                continue
-            pairs_df = self._fuzzy_pairs_for_blocks(
-                left_block, right_block, field, threshold
-            )
-            if pairs_df is not None and pairs_df.height > 0:
-                all_pairs.append(pairs_df)
-
-        if not all_pairs:
-            return self._empty_fuzzy_result()
-
-        pairs = pl.concat(all_pairs).unique(subset=[self.left_id, "_right_id_val"], keep="first")
-
-        # Rejoin with full left/right to get same shape as match() and add confidence
-        right_id_right = f"{self.right_id}_right"
-        right_with_suffix = self.right.with_columns(
-            pl.col(self.right_id).alias(right_id_right)
-        )
-        result = (
-            pairs.join(self.left, on=self.left_id, how="left")
-            .join(
-                right_with_suffix,
-                left_on="_right_id_val",
-                right_on=self.right_id,
-                how="left",
-                suffix="_right",
-            )
-            .drop("_right_id_val")
-        )
-
-        from matcher.results import MatchResults
-        return MatchResults(result, original_left=self.left, source=self)
-
-    def _fuzzy_block_pairs(
-        self,
-        left_valid: DataFrame,
-        right_valid: DataFrame,
-        blocking_key: str
-    ) -> list[tuple[DataFrame, DataFrame]]:
-        """Return list of (left_block, right_block) for each common blocking key value."""
-        return self._paired_blocks_by_key(left_valid, right_valid, blocking_key)
-
-    def _fuzzy_pairs_for_blocks(
-        self,
-        left_block: DataFrame,
-        right_block: DataFrame,
-        field: str,
-        threshold: float
-    ) -> Optional[DataFrame]:
-        """Run fuzzy similarity on one block; return DataFrame (left_id, _right_id_val, confidence) or None."""
-        left_norm = left_block.with_columns(
-            pl.col(field).str.to_lowercase().str.strip_chars().alias("_fuzzy_val")
-        )
-        right_norm = right_block.with_columns(
-            pl.col(field).str.to_lowercase().str.strip_chars().alias("_fuzzy_val")
-        )
-        left_arrow = left_norm.select("_fuzzy_val").to_arrow()
-        right_arrow = right_norm.select("_fuzzy_val").to_arrow()
-        left_strings = left_arrow.column("_fuzzy_val").to_pylist()
-        right_strings = right_arrow.column("_fuzzy_val").to_pylist()
-
-        from rapidfuzz import process
-        from rapidfuzz.distance import JaroWinkler
-        import numpy as np
-
-        matrix = process.cdist(
-            left_strings,
-            right_strings,
-            scorer=JaroWinkler.similarity,
-            workers=-1,
-            score_cutoff=threshold,
-        )
-        rows, cols = np.where(matrix >= threshold)
-        if len(rows) == 0:
-            return None
-
-        left_id_list = left_block.select(self.left_id).to_series().to_list()
-        right_id_list = right_block.select(self.right_id).to_series().to_list()
-        pairs_data = {
-            self.left_id: [left_id_list[int(r)] for r in rows],
-            "_right_id_val": [right_id_list[int(c)] for c in cols],
-            "confidence": matrix[rows, cols].astype(float).tolist(),
-        }
-        return pl.DataFrame(pairs_data)
