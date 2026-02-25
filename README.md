@@ -43,7 +43,7 @@ The examples below use paths from the project's generated test data. Create them
 
 ```python
 import polars as pl
-from matcher import Matcher, Deduplicator
+from matcher import Matcher, Deduplicator, FuzzyMatcher
 
 # Load data (you load DataFrames, matcher operates on them)
 left_df = pl.read_parquet("data/ExactMatcher/entity_resolution/customers_a.parquet")
@@ -51,25 +51,22 @@ right_df = pl.read_parquet("data/ExactMatcher/entity_resolution/customers_b.parq
 
 # Entity resolution (using default components)
 matcher = Matcher(left=left_df, right=right_df, left_id="id", right_id="id")
-results = matcher.match(rules="email")
+results = matcher.match(on="email")
 print(f"Found {results.count} matches")
 results.matches.head(10)
 
 # Deduplication (single source)
 df = pl.read_parquet("data/ExactMatcher/deduplication/customers.parquet")
 deduplicator = Deduplicator(source=df, id_col="id")
-results = deduplicator.match(rules="email")
+results = deduplicator.match(on="email")
 print(f"Found {results.count} duplicate pairs")
 
 # Multiple rules: cascading (email first, then name for unmatched left rows)
-results = matcher.match(rules=[
-    "email",
-    ["first_name", "last_name"]
-])
+results = matcher.match(on="email").refine(on=["first_name", "last_name"])
 
 # Fuzzy matching (typo-tolerant, single field) and optional blocking
-# results = matcher.match_fuzzy(field="name", threshold=0.85)
-# results = matcher.match(rules="email", blocking_key="zip_code")
+# results = matcher.match(on=["name"], matching_algorithm=FuzzyMatcher(threshold=0.85))
+# results = matcher.match(on="email", blocking_key="zip_code")
 ```
 
 ### Null handling
@@ -109,11 +106,11 @@ ground_truth = pl.DataFrame({
 matcher = Matcher(left=left_df, right=right_df, left_id="id", right_id="id")
 
 # Test email-only matching
-results_email = matcher.match(rules="email")
+results_email = matcher.match(on="email")
 metrics_email = results_email.evaluate(ground_truth)
 
 # Test name-only matching
-results_name = matcher.match(rules=["first_name", "last_name"])
+results_name = matcher.match(on=["first_name", "last_name"])
 metrics_name = results_name.evaluate(ground_truth)
 
 # Compare results
@@ -148,18 +145,19 @@ matcher = Matcher(
     right=right_df,
     matching_algorithm=MyCustomMatcher()
 )
-results = matcher.match(rules="email")
+results = matcher.match(on="email")
 ```
 
 ### Cascading matching (refine)
 
-Additional rules run only on left-side records that didn’t match yet (cascading). Simplest: pass multiple rules and optional per-rule blocking:
+Additional rules run only on left-side records that didn’t match yet (cascading). Chain `match(on=...)` then `refine(on=...)`; optional `blocking_key` per step:
 
 ```python
-# Cascading with optional per-rule blocking
-results = matcher.match(
-    rules=["email", ["first_name", "last_name"], ["address"]],
-    blocking_key=["zip_code", "zip_code", "zip_code"]  # optional: one per rule
+results = (
+    matcher
+    .match(on="email")
+    .refine(on=["first_name", "last_name"])
+    .refine(on=["address"], blocking_key="zip_code")
 )
 ```
 
@@ -167,9 +165,9 @@ Or chain manually:
 ```python
 results = (
     matcher
-    .match(rules="email")
-    .refine(rule=["first_name", "last_name"])
-    .refine(rule=["address"], blocking_key="zip_code")
+    .match(on="email")
+    .refine(on=["first_name", "last_name"])
+    .refine(on=["address"], blocking_key="zip_code")
 )
 ```
 
@@ -189,7 +187,7 @@ right_df = pl.read_parquet("data/ExactMatcher/entity_resolution/customers_b.parq
 matcher = Matcher(left=left_df, right=right_df, left_id="id", right_id="id")
 
 # Run matching
-results = matcher.match(rules="email")
+results = matcher.match(on="email")
 
 # Evaluate against ground truth (DataFrame with left_id, right_id columns)
 ground_truth = pl.DataFrame({
@@ -208,7 +206,7 @@ print(f"F1 Score: {metrics['f1']:.2%}")
 Use evaluate so **you** can improve: get ground truth, run match, evaluate, change something, re-run, compare metrics until the result is good enough.
 
 1. **Get ground truth** — Known pairs (e.g. from a human-reviewed sample or existing labels) as a DataFrame with `left_id` and `right_id`. Load from CSV or Parquet if needed: `ground_truth = pl.read_csv("reviewed.csv")`.
-2. **Run your matcher** — e.g. `results = matcher.match(rules="email")` or `matcher.match_fuzzy(field="name", threshold=0.85)`.
+2. **Run your matcher** — e.g. `results = matcher.match(on="email")` or `matcher.match(on=["name"], matching_algorithm=FuzzyMatcher(threshold=0.85))`.
 3. **Evaluate** — `metrics = results.evaluate(ground_truth)`. For deduplication, or when the left and right id columns share the same name (e.g. both `id`), pass `right_id_col="id_right"` so the evaluator can correctly resolve right-side ids.
 4. **Change something** — Adjust rules, threshold, or blocking_key.
 5. **Re-run and compare** — Run again, call `evaluate(ground_truth)`, compare precision/recall/F1 to the previous run.
@@ -217,12 +215,14 @@ Use evaluate so **you** can improve: get ground truth, run match, evaluate, chan
 Example: compare two thresholds by running each and comparing metrics:
 
 ```python
+from matcher import FuzzyMatcher
+
 # Try threshold 0.85
-results_85 = matcher.match_fuzzy(field="name", threshold=0.85)
+results_85 = matcher.match(on=["name"], matching_algorithm=FuzzyMatcher(threshold=0.85))
 m85 = results_85.evaluate(ground_truth)
 
 # Try threshold 0.82 (more recall, maybe more false positives)
-results_82 = matcher.match_fuzzy(field="name", threshold=0.82)
+results_82 = matcher.match(on=["name"], matching_algorithm=FuzzyMatcher(threshold=0.82))
 m82 = results_82.evaluate(ground_truth)
 
 # Choose based on evidence
@@ -238,12 +238,12 @@ Use evaluation to:
 
 ### Tuning fuzzy threshold
 
-For fuzzy matching, use `find_best_threshold()` to pick a confidence threshold from match results and ground truth (it sweeps thresholds and returns the one that maximizes F1). Requires a `confidence` column, so use `match_fuzzy()` results:
+For fuzzy matching, use `find_best_threshold()` to pick a confidence threshold from match results and ground truth (it sweeps thresholds and returns the one that maximizes F1). Requires a `confidence` column, so use results from `match(on=[...], matching_algorithm=FuzzyMatcher(...))`:
 
 ```python
-from matcher import Matcher, find_best_threshold
+from matcher import Matcher, FuzzyMatcher, find_best_threshold
 
-results = matcher.match_fuzzy(field="name", threshold=0.85)
+results = matcher.match(on=["name"], matching_algorithm=FuzzyMatcher(threshold=0.85))
 best = find_best_threshold(results.matches, ground_truth, right_id_col="id_right")
 print(f"Best threshold: {best['best_threshold']}, F1: {best['best_f1']:.2%}")
 ```
@@ -253,7 +253,7 @@ print(f"Best threshold: {best['best_threshold']}, F1: {best['best_f1']:.2%}")
 Export match results to **CSV** for human review (opens in Excel, Power BI, or any tool). The file includes identifiers and joined columns so reviewers have enough context without opening other systems. Use `sample(n=...)` to export a manageable sample for reviewers.
 
 ```python
-results = matcher.match_fuzzy(field="name", threshold=0.85)
+results = matcher.match(on=["name"], matching_algorithm=FuzzyMatcher(threshold=0.85))
 results.export_for_review("matches_for_review.csv")
 
 # Export a sample for reviewers

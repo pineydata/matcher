@@ -9,7 +9,7 @@ A practical guide to deciding the combination of exact and fuzzy matching, asses
 **When to use exact matching**
 
 - The field is a stable identifier or is well-normalized (e.g. email, ID, cleaned postcode).
-- You want zero false positives on that field (e.g. `rules="email"`).
+- You want zero false positives on that field (e.g. `on="email"`).
 
 **When to use fuzzy matching**
 
@@ -18,23 +18,24 @@ A practical guide to deciding the combination of exact and fuzzy matching, asses
 
 **How to combine them in matcher**
 
-- **Cascading exact rules** (recommended): Use a single `match()` call with multiple rules. The first rule runs on the full set; later rules run only on left rows that didn't match yet (cascading). Example:
+- **Cascading exact rules** (recommended): Use `match(on=...)` then `refine(on=...)` for each additional rule. The first rule runs on the full set; later rules run only on left rows that didn't match yet (cascading). Example:
 
   ```python
-  results = matcher.match(
-      rules=["email", ["first_name", "last_name"], ["address"]],
-      blocking_key=["zip_code", "zip_code", "zip_code"]  # optional: one per rule
+  results = (
+      matcher.match(on="email")
+      .refine(on=["first_name", "last_name"])
+      .refine(on=["address"], blocking_key="zip_code")
   )
   ```
 
-- **Exact then exact refine**: Same idea via chaining: `matcher.match(rules="email").refine(rule=["first_name", "last_name"])` — still all exact.
+- **Exact then exact refine**: Same idea: `matcher.match(on="email").refine(on=["first_name", "last_name"])` — still all exact.
 
-- **Exact vs fuzzy as separate strategies**: The library has `match()` (exact, possibly multiple rules + refine) and `match_fuzzy()` (single field, one threshold). There is no `refine_fuzzy()`. To combine "exact first, then fuzzy on unmatched" you'd run both (e.g. `match(rules="email")` and `match_fuzzy(field="name", threshold=0.85)`), then merge/deduplicate results yourself, or run fuzzy only on a subset of data you derive from "unmatched" left rows.
+- **Exact vs fuzzy as separate strategies**: The library has `match(on=...)` (exact, or fuzzy when you pass `matching_algorithm=FuzzyMatcher(...)`). There is no separate `match_fuzzy()` method. To combine "exact first, then fuzzy on unmatched" you'd run both (e.g. `match(on="email")` and `match(on=["name"], matching_algorithm=FuzzyMatcher(threshold=0.85))`), then merge/deduplicate results yourself (e.g. via `MatchResults.union()`), or run fuzzy only on a subset of data you derive from "unmatched" left rows.
 
 **Practical design steps**
 
 1. Start with **exact rules only** on the cleanest identifiers (e.g. email, then name, then address).
-2. **Evaluate** (see §3). If recall is too low and you see missed matches due to typos/variants, add **fuzzy** on the relevant field (e.g. name) via `match_fuzzy()` and compare metrics.
+2. **Evaluate** (see §3). If recall is too low and you see missed matches due to typos/variants, add **fuzzy** on the relevant field (e.g. name) via `match(on=["name"], matching_algorithm=FuzzyMatcher(...))` and compare metrics.
 3. For fuzzy, **tune the threshold** with `find_best_threshold()` so you don't guess (e.g. 0.85); the library is built for this data-driven choice.
 
 ---
@@ -54,8 +55,8 @@ Restricts candidate pairs to rows that share the same value in a blocking key (e
 
 1. **Correctness (recall)**  
    With blocking, you only see pairs that fall in the same block. So:
-   - Run **with** blocking: `matcher.match(rules="email", blocking_key="zip_code")`.
-   - Run **without** blocking: `matcher.match(rules="email")`.
+   - Run **with** blocking: `matcher.match(on="email", blocking_key="zip_code")`.
+   - Run **without** blocking: `matcher.match(on="email")`.
    - Compare **recall** (and match counts) on the same ground truth. If recall drops with blocking, some true pairs lie in different blocks — either fix the key (e.g. use a field that aligns better with how matches actually occur) or use no blocking / a different key.
 
 2. **Performance**  
@@ -83,11 +84,8 @@ The library is built for a **measure → tune → compare** workflow.
 
 ```python
 # Run your chosen algorithm (exact, fuzzy, blocking, etc.)
-results = matcher.match(
-    rules=["email", ["first_name", "last_name"]],
-    blocking_key="zip_code"
-)
-# Or: results = matcher.match_fuzzy(field="name", threshold=0.85)
+results = matcher.match(on="email").refine(on=["first_name", "last_name"], blocking_key="zip_code")
+# Or: results = matcher.match(on=["name"], matching_algorithm=FuzzyMatcher(threshold=0.85))
 
 metrics = results.evaluate(
     ground_truth,
@@ -111,9 +109,9 @@ metrics = results.evaluate(
 Use `find_best_threshold()` so you don't pick the threshold by hand:
 
 ```python
-from matcher import Matcher, find_best_threshold
+from matcher import Matcher, FuzzyMatcher, find_best_threshold
 
-results = matcher.match_fuzzy(field="name", threshold=0.85)
+results = matcher.match(on=["name"], matching_algorithm=FuzzyMatcher(threshold=0.85))
 best = find_best_threshold(
     results.matches,
     ground_truth,
@@ -122,13 +120,13 @@ best = find_best_threshold(
 # best["best_threshold"], best["best_f1"], best["curve"]
 ```
 
-Run `match_fuzzy` with a low threshold so you have enough scored pairs; then `find_best_threshold` picks the best cutoff by F1 (and you can inspect precision/recall on the curve).
+Run `match(on=["name"], matching_algorithm=FuzzyMatcher(threshold=...))` with a low threshold so you have enough scored pairs; then `find_best_threshold` picks the best cutoff by F1 (and you can inspect precision/recall on the curve).
 
 **What to compare**
 
-- **Exact vs fuzzy:** e.g. `match(rules="email")` vs `match_fuzzy(field="name", threshold=0.85)` on the same data and ground truth.
+- **Exact vs fuzzy:** e.g. `match(on="email")` vs `match(on=["name"], matching_algorithm=FuzzyMatcher(threshold=0.85))` on the same data and ground truth.
 - **Blocking:** same rules, with vs without `blocking_key`, same ground truth — check recall and runtime.
-- **Thresholds:** multiple `match_fuzzy(..., threshold=t)` or `find_best_threshold(..., thresholds=[...])` and compare F1/precision/recall.
+- **Thresholds:** multiple `match(on=[...], matching_algorithm=FuzzyMatcher(threshold=t))` or `find_best_threshold(..., thresholds=[...])` and compare F1/precision/recall.
 
 ---
 
@@ -136,8 +134,8 @@ Run `match_fuzzy` with a low threshold so you have enough scored pairs; then `fi
 
 | Decision           | How to decide                                                                 | How matcher helps                                                                 |
 |--------------------|-------------------------------------------------------------------------------|-----------------------------------------------------------------------------------|
-| **Exact vs fuzzy** | Use exact on clean IDs; add fuzzy where typos/variants hurt recall.          | `match(rules=...)` for exact (and cascading); `match_fuzzy(field=..., threshold=...)` for fuzzy; evaluate both. |
-| **Combining rules**| Order by confidence (e.g. email → name → address); use cascading.             | Multiple rules in `match()`, or `refine(rule=...)` for one extra exact rule.      |
+| **Exact vs fuzzy** | Use exact on clean IDs; add fuzzy where typos/variants hurt recall.          | `match(on=...)` for exact (and cascading); `match(on=[...], matching_algorithm=FuzzyMatcher(...))` for fuzzy; evaluate both. |
+| **Combining rules**| Order by confidence (e.g. email → name → address); use cascading.             | One rule per `match(on=...)`; chain with `refine(on=...)` for extra rules.      |
 | **Blocking**       | Choose a key that true pairs usually share; avoid keys that split true pairs. | `blocking_key` (single or per-rule); compare recall with vs without blocking.    |
 | **Evaluation**     | Ground truth + precision/recall/F1; iterate by changing rules, threshold, or blocking. | `results.evaluate(ground_truth)`; `find_best_threshold()` for fuzzy; improvement loop. |
 
