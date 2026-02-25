@@ -99,7 +99,6 @@ class Deduplicator:
             MatchResults with duplicate pairs (self-matches excluded).
         """
         id_col_right = f"{self._id_col}_right"
-        self._matcher._normalize_single_rule(on)  # validate single rule
         results = self._matcher.match(
             on=on,
             blocking_key=blocking_key,

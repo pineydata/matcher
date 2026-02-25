@@ -724,7 +724,7 @@ def test_match_blocking_key_per_rule():
     assert by_zip.count == 0
 
 
-def test_match_blocking_key_list_length_must_match_rules():
+def test_match_multiple_rules_raises_use_refine():
     """Multiple rules (list of lists) raises; use .refine() for cascade."""
     left = pl.DataFrame({"id": [1], "email": ["a@x.com"], "name": ["A"], "zip_code": ["1"]})
     right = pl.DataFrame({"id": [2], "email": ["a@x.com"], "name": ["A"], "zip_code": ["1"]})

@@ -77,7 +77,7 @@ class MatchResults:
         Args:
             matches: Polars DataFrame with match results
             original_left: Original left DataFrame (stored for refine operations)
-            source: Matcher or Deduplicator that produced these results (enables refine(rule=...) without passing matcher)
+            source: Matcher or Deduplicator that produced these results (enables refine(on=...) without passing matcher)
         """
         self.matches = matches
         self._original_left = original_left
@@ -101,7 +101,7 @@ class MatchResults:
             New MatchResults with transformed matches
 
         Example:
-            >>> results = matcher.match(rule=["email"])
+            >>> results = matcher.match(on="email")
             >>> filtered = results.pipe(lambda df: df.filter(pl.col("confidence") > 0.9))
         """
         return MatchResults(func(self.matches), self._original_left, self._source)

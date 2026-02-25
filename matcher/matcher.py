@@ -159,6 +159,7 @@ class Matcher:
         if not all_matches:
             if matching_algorithm is not None and isinstance(matching_algorithm, FuzzyMatcher):
                 return self._empty_fuzzy_result()
+            # Build empty result schema: use first left column only when IDs differ (must exist on right).
             if self.left_id == self.right_id and self.left_id in self.right.columns:
                 join_col = self.left_id
             else:
@@ -247,7 +248,12 @@ class Matcher:
         return self._paired_blocks_by_key(self.left, self.right, keys)
 
     def _normalize_single_rule(self, on: Union[str, list]) -> list[str]:
-        """Normalize on= to a single rule as list of field names. Reject multiple rules."""
+        """Normalize on= to a single rule as list of field names. Reject multiple rules.
+
+        Accepts: str (one field), list[str] (multiple fields in one rule), or list of one list
+        (e.g. on=[["first_name", "last_name"]] treated as that inner list). Rejects list of
+        multiple lists (multiple rules); use .refine(on=...) for cascading.
+        """
         if isinstance(on, str):
             return [on]
         if isinstance(on, list) and len(on) > 0:
