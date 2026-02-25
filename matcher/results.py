@@ -34,7 +34,7 @@ Key Methods:
 - count: Property returning the number of matches
 - pipe(): Chain arbitrary DataFrame transformations
 - refine(): Apply additional matching rules to unmatched records
-- union(): Combine with other MatchResults (same source); pair set is union, score/on merged (first non-null wins)
+- union(): Combine with other MatchResults (same source); pair set is union; score/on preserved per run (first run → kind_score/kind_on, later runs → kind_score_2/kind_on_2, etc.; no coalescing)
 - evaluate(): Compare matches against ground truth and return metrics
 - sample(): Return a random sample of matches (for review or inspection)
 - export_for_review(): Export matches to CSV for human review (Phase 4)
@@ -310,7 +310,7 @@ class MatchResults:
             to_drop = [c for c in ["_lid", "_rid"] if c in combined.columns]
             if to_drop:
                 combined = combined.drop(to_drop)
-            # Discover score/on columns from both sides; merge (first non-null wins per pair)
+            # Merge provenance: first non-null per pair from existing then new.
             score_on_cols = [c for c in new_matches.columns if is_score_on_column(c)]
             if score_on_cols:
                 new_scores = new_matches.select([left_id, right_id_right] + score_on_cols)

@@ -48,9 +48,9 @@ def is_score_on_column(name: str) -> bool:
 def kind_of_score_on_column(name: str) -> Optional[str]:
     """Return the algorithm kind for a score/on column (e.g. 'exact_score' -> 'exact')."""
     if name.endswith("_score"):
-        return name[:-6]
+        return name[:-6] or None
     if name.endswith("_on"):
-        return name[:-3]
+        return name[:-3] or None
     return None
 
 

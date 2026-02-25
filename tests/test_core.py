@@ -935,6 +935,17 @@ def test_union_exact_and_fuzzy():
     assert "fuzzy_on" in combined.matches.columns
 
 
+def test_match_empty_when_blocking_has_no_common_keys():
+    """No blocks (blocking_key has no common values) returns empty MatchResults with provenance columns."""
+    left = pl.DataFrame({"id": [1, 2], "email": ["a@x.com", "b@x.com"], "zip": [1, 2]})
+    right = pl.DataFrame({"id": [10, 20], "email": ["a@x.com", "c@x.com"], "zip": [9, 9]})
+    matcher = Matcher(left=left, right=right, left_id="id", right_id="id")
+    result = matcher.match(on="email", blocking_key="zip")  # zip 1,2 vs 9,9 -> no common blocks
+    assert result.count == 0
+    assert "exact_score" in result.matches.columns
+    assert "exact_on" in result.matches.columns
+
+
 def test_union_empty_with_non_empty():
     """Union with empty MatchResults yields the non-empty result's pairs."""
     left_b = pl.DataFrame({"id": [1, 2], "email": ["a@x.com", "b@x.com"], "zip": [1, 2]})

@@ -73,10 +73,13 @@ def _add_provenance_columns(
             pl.Series(on_col, [], dtype=pl.Object),
         ])
     source = getattr(algo, "source_score_column", None)
+    if source and source not in df.columns:
+        raise ValueError(
+            f"Algorithm {type(algo).__name__} declares source_score_column={source!r} "
+            f"but match() output has no column {source!r}. Available: {list(df.columns)}."
+        )
     score_expr = (
-        pl.col(source).alias(score_col)
-        if source and source in df.columns
-        else pl.lit(1.0).alias(score_col)
+        pl.col(source).alias(score_col) if source else pl.lit(1.0).alias(score_col)
     )
     on_expr = pl.Series(on_col, [on] * n, dtype=pl.Object)
     out = df.with_columns([score_expr, on_expr])
@@ -365,7 +368,9 @@ class Matcher:
             cols_to_drop = [c for c in ["left_id", "right_id"] if c in result.columns]
             if cols_to_drop:
                 result = result.drop(cols_to_drop)
-            # Preserve confidence from algorithm output (e.g. FuzzyMatcher) for backward compatibility
+            # Preserve confidence from algorithm output (e.g. FuzzyMatcher) for backward compat.
+            # _add_provenance_columns also sets confidence on the final result; this join restores
+            # it after we rejoin from pairs (so it is not redundant).
             for m in all_matches:
                 if "confidence" in m.columns and self.left_id in m.columns and right_id_right in m.columns:
                     conf = m.select(pl.col(self.left_id), pl.col(right_id_right), pl.col("confidence"))
