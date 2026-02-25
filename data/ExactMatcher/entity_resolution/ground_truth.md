@@ -65,18 +65,18 @@ Total known matches: 40
 
 ```python
 # Email-only matches
-results = matcher.match(rules="email")
+results = matcher.match(on="email")
 # Should find: 10 email-only + 10 mixed = 20 matches
 
 # Name-only matches
-results = matcher.match(rules=["first_name", "last_name"])
+results = matcher.match(on=["first_name", "last_name"])
 # Should find: 10 name-only + 10 mixed = 20 matches
 
 # Multi-field matches
-results = matcher.match(rules=["address", "zip_code"])
+results = matcher.match(on=["address", "zip_code"])
 # Should find: 10 multi-field matches
 
 # Multiple rules (OR logic)
-results = matcher.match(rules=["email", ["first_name", "last_name"]])
+results = matcher.match(on="email").refine(on=["first_name", "last_name"])
 # Should find: All 40 matches
 ```

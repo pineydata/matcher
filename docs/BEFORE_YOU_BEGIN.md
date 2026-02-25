@@ -12,7 +12,7 @@ Use this doc first; then follow [MATCHING_ALGORITHM_DESIGN.md](MATCHING_ALGORITH
 
 - **Entity resolution (two sources):** Each DataFrame must have the ID column you pass to `Matcher(..., left_id=..., right_id=...)`. Those columns are required; matcher will raise if they are missing.
 - **Deduplication (one source):** The single DataFrame must have the column you pass to `Deduplicator(..., id_col=...)`.
-- **Match and blocking fields:** Every column you use in `rules`, `refine(rule=...)`, `match_fuzzy(field=...)`, or `blocking_key` must exist in the relevant table(s). For entity resolution, each such column must be present in **both** left and right and must have the **same name** in both (matcher joins on that name and validates up front).
+- **Match and blocking fields:** Every column you use in `on` (for `match(on=...)` and `refine(on=...)`), or in `match(on=[...], matching_algorithm=FuzzyMatcher(...))`, or `blocking_key` must exist in the relevant table(s). For entity resolution, each such column must be present in **both** left and right and must have the **same name** in both (matcher joins on that name and validates up front).
 
 **Uniqueness**
 
@@ -66,14 +66,14 @@ Matcher does **no** normalization for exact rules; comparison is by Polars join 
 
 - For the fuzzy field only, matcher applies **lowercase** and **strip** (trim) when computing similarity. It does not change the stored data or add new columns. See [matcher.py](../matcher/matcher.py) (e.g. `str.to_lowercase().str.strip_chars()`).
 
-**What to do before calling `match_fuzzy`**
+**What to do before calling fuzzy match**
 
 - **Type:** The fuzzy field must be a string column (`Utf8`). Cast if needed: `pl.col("name").cast(pl.Utf8)`.
 - **Encoding:** Ensure strings are valid UTF-8; fix or drop rows with bad encoding if you load from external systems.
 - **Optional extra normalization:** If your data has systematic variation (e.g. “Jr.”, “Ph.D.”, extra spaces), consider:
   - Normalizing spacing (e.g. collapse multiple spaces to one).
   - Replacing or removing punctuation that shouldn’t affect identity (e.g. periods in abbreviations).
-  - Doing this in a derived column and using that column in `match_fuzzy(field="name_clean")` so you keep the original for review.
+  - Doing this in a derived column and using that column in `match(on=["name_clean"], matching_algorithm=FuzzyMatcher(...))` so you keep the original for review.
 
 ---
 
@@ -81,7 +81,7 @@ Matcher does **no** normalization for exact rules; comparison is by Polars join 
 
 **Derived columns for matching**
 
-- **Full name:** If you want one fuzzy field for “name”, create e.g. `full_name = first_name + " " + last_name` (and handle nulls/middles). Then use `match_fuzzy(field="full_name", ...)`.
+- **Full name:** If you want one fuzzy field for “name”, create e.g. `full_name = first_name + " " + last_name` (and handle nulls/middles). Then use `match(on=["full_name"], matching_algorithm=FuzzyMatcher(...))`.
 - **Address line:** Similarly, a single `address_line` (e.g. street + city + zip) can be used for one rule or one fuzzy field, with consistent separators and null handling.
 
 **Derived columns for blocking**
@@ -99,7 +99,7 @@ Matcher does **no** normalization for exact rules; comparison is by Polars join 
 
 ## 6. Data Types and Encoding
 
-- **Fuzzy:** The field passed to `match_fuzzy(field=...)` must be `Utf8`. Cast before matching if you have other types (e.g. from CSV or DB).
+- **Fuzzy:** The field passed to `match(on=[...], matching_algorithm=FuzzyMatcher(...))` must be `Utf8`. Cast before matching if you have other types (e.g. from CSV or DB).
 - **Exact:** Join keys can be any type Polars can compare for equality (e.g. string, int). Left and right must be the same type for the same field (e.g. don’t join string to int).
 - **IDs:** Typically string or int; ensure no accidental float or mixed types so joins and evaluation are stable.
 
@@ -125,7 +125,7 @@ Matcher does **no** normalization for exact rules; comparison is by Polars join 
 |------|-------------|
 | **Schema** | Required ID column(s) and all rule/blocking/fuzzy fields present; names consistent with `left_id` / `right_id` / `id_col`. |
 | **Nulls** | Policy for nulls in match and blocking fields (drop, fill, or leave; remember matcher excludes nulls from exact/fuzzy matches). |
-| **Exact rules** | Standardize case, whitespace, and format (e.g. phone, email) in columns used in `rules` or `refine(rule=...)`. |
+| **Exact rules** | Standardize case, whitespace, and format (e.g. phone, email) in columns used in `match(on=...)` or `refine(on=...)`. |
 | **Fuzzy field** | Utf8; optional extra normalization in a derived column; encoding and spacing considered. |
 | **Feature engineering** | Derived columns for full name, address, or blocking (prefix/bucket) as needed; same logic on both sources. |
 | **Ground truth** | `left_id` and `right_id` DataFrame ready if you will call `evaluate()` or `find_best_threshold()`. |

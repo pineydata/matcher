@@ -778,7 +778,7 @@ def test_match_blocking_key_per_rule_none_for_one_rule():
 
 
 def test_match_fuzzy_with_blocking_key():
-    """match_fuzzy with blocking_key finds matches only within blocks."""
+    """match(on=[...], FuzzyMatcher, blocking_key=...) finds matches only within blocks."""
     left = pl.DataFrame({
         "id": [1, 2],
         "name": ["Alice Smith", "Bob Jones"],

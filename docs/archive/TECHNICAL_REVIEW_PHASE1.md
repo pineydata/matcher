@@ -103,15 +103,15 @@ ValueError: "Left source MUST have 'id' column. Found columns: ['email', 'name']
 
 **Strengths:**
 - **Solves real problem**: Entity resolution and deduplication are common data engineering tasks
-- **Simple API**: `matcher.match(rules="email")` is intuitive
+- **Simple API**: `matcher.match(on="email")` is intuitive
 - **Notebook-friendly**: Works perfectly in Jupyter notebooks
 - **Immediate feedback**: Results are DataFrames you can explore immediately
 
 **API Evolution:**
 The API has evolved beyond the original Phase 1 plan (which was just `match(field="email")`) to support:
-- Single field: `match(rules="email")`
-- Multi-field rule: `match(rules=["first_name", "last_name"])`
-- Multiple rules: `match(rules=["email", ["first_name", "last_name"]])`
+- Single field: `match(on="email")`
+- Multi-field rule: `match(on=["first_name", "last_name"])`
+- Multiple rules: `match(on="email").refine(on=["first_name", "last_name"])`
 
 This is **good evolution** - it's still simple but more powerful. The normalization logic handles all cases cleanly.
 
@@ -217,7 +217,7 @@ ValueError: "Field(s) ['missing_field'] not found in left source. Available: ['i
 - **Type hints**: Full type hints on public methods
 - **Modern Python**: Uses f-strings, `pathlib.Path` (in tests), type hints
 - **EAFP**: Tries operations, handles exceptions clearly
-- **One obvious way**: `matcher.match(rules="email")` is the obvious way
+- **One obvious way**: `matcher.match(on="email")` is the obvious way
 
 **Examples of Pythonic code:**
 ```python
@@ -324,7 +324,7 @@ right_df = pl.read_parquet("data/customers_b.parquet")
 
 # Create matcher
 matcher = Matcher(left=left_df, right=right_df)
-results = matcher.match(rules="email")
+results = matcher.match(on="email")
 ```
 
 **Impact:** Users can now follow the README without errors.
@@ -470,7 +470,7 @@ README has been updated to:
    - Type hints throughout
 
 2. **Natural, Pythonic API**
-   - `matcher.match(rules="email")` feels natural
+   - `matcher.match(on="email")` feels natural
    - Works well in notebooks
    - Results are immediately explorable
 

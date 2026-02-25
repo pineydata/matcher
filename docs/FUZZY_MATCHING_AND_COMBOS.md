@@ -8,7 +8,7 @@ How fuzzy matching works in matcher (single rule), how to build combos (exact + 
 
 **Fuzzy is a single rule.** In matcher, fuzzy matching is always one rule:
 
-- **One field:** `match_fuzzy(field="name", ...)` — you pass a single column name.
+- **One field:** `match(on=["name"], matching_algorithm=FuzzyMatcher(...))` — you pass a single column name (as a one-element list).
 - **One similarity:** Jaro-Winkler (via rapidfuzz), with a single `threshold`.
 - **No multiple fuzzy rules:** There is no built-in “fuzzy rule 1 OR fuzzy rule 2” or “fuzzy on field A and fuzzy on field B” in one call.
 
@@ -16,12 +16,12 @@ So “fuzzy” in this codebase = one field, one threshold, one similarity measu
 
 **Combos are things you build yourself:**
 
-- **Exact + exact:** Built-in — use `match(rules=["email", ["first_name", "last_name"]])` or `match(...).refine(rule=[...])`. Multiple exact rules, cascading.
+- **Exact + exact:** Built-in — use `match(on="email").refine(on=["first_name", "last_name"])`. Multiple exact rules, cascading.
 - **Exact + fuzzy:** Not a single API. You run both and merge:
-  - `exact_results = matcher.match(rules="email")`
-  - `fuzzy_results = matcher.match_fuzzy(field="name", threshold=0.85)`
+  - `exact_results = matcher.match(on="email")`
+  - `fuzzy_results = matcher.match(on=["name"], matching_algorithm=FuzzyMatcher(threshold=0.85))`
   - Then combine the two sets of pairs (and deduplicate by `(left_id, right_id)` if a pair appears in both).
-- **Fuzzy + fuzzy:** Also not built-in. You’d run `match_fuzzy(field="name", ...)` and `match_fuzzy(field="address", ...)` and merge/dedupe the pair sets yourself.
+- **Fuzzy + fuzzy:** Also not built-in. You’d run `match(on=["name"], ...)` and `match(on=["address"], ...)` with `FuzzyMatcher` and merge/dedupe the pair sets yourself.
 
 So: **fuzzy is a single rule**; a “combo” is when you **combine** that with other match outputs (exact and/or more fuzzy) in your own code.
 
@@ -117,8 +117,8 @@ Having a blended algorithm — several exact rules, several fuzzy rules, and a s
 
 ### 3.2 Run each rule separately
 
-- **Exact:** Use `matcher.match(rules=[...])` with all your exact rules (cascading), or `match(rules="email").refine(rule=["first_name", "last_name"])` etc. You get one DataFrame of pairs (no per-rule score from matcher).
-- **Fuzzy:** Call `matcher.match_fuzzy(field=..., threshold=...)` once per field (e.g. name, address). Use a **low** threshold (e.g. 0.5–0.6) so you get many candidates; you will filter later with the blended score. Each result has a `confidence` column for that field.
+- **Exact:** Use `matcher.match(on=...)` and `refine(on=...)` with all your exact rules (cascading), e.g. `match(on="email").refine(on=["first_name", "last_name"])`. You get one DataFrame of pairs (no per-rule score from matcher).
+- **Fuzzy:** Call `matcher.match(on=[field], matching_algorithm=FuzzyMatcher(threshold=...))` once per field (e.g. name, address). Use a **low** threshold (e.g. 0.5–0.6) so you get many candidates; you will filter later with the blended score. Each result has a `confidence` column for that field.
 - **Blocking:** Use the same `blocking_key` where it makes sense (e.g. zip or region) so all rules run within the same blocks and performance stays manageable. Blocking key must be present in both sources with the same name.
 
 ### 3.3 Collect candidate pairs and per-rule scores
@@ -148,7 +148,7 @@ Having a blended algorithm — several exact rules, several fuzzy rules, and a s
 
 ### 3.7 Keep the pipeline reproducible
 
-- Use fixed per-fuzzy thresholds when you run `match_fuzzy` (even if low); then use the **blended** score and **one** cutoff for accept/reject. That way the same inputs and weights always give the same outputs.
+- Use fixed per-fuzzy thresholds when you run `match(on=[...], matching_algorithm=FuzzyMatcher(...))` (even if low); then use the **blended** score and **one** cutoff for accept/reject. That way the same inputs and weights always give the same outputs.
 - Optionally store the rule list and weights in config or code so you can re-run and audit.
 
 ### 3.8 Minimal code sketch (blended, no weights)
@@ -158,13 +158,14 @@ import polars as pl
 from matcher import Matcher, MatchResults, SimpleEvaluator
 
 # 1) Exact
-exact = matcher.match(rules=["email", ["first_name", "last_name"]])
+exact = matcher.match(on="email").refine(on=["first_name", "last_name"])
 exact_df = exact.matches.select(["id", "id_right"]).with_columns(
     pl.lit(1.0).alias("score")
 )
 
 # 2) Fuzzy (low threshold to get candidates)
-fuzzy_name = matcher.match_fuzzy(field="name", threshold=0.5)
+from matcher import FuzzyMatcher
+fuzzy_name = matcher.match(on=["name"], matching_algorithm=FuzzyMatcher(threshold=0.5))
 fuzzy_name_df = fuzzy_name.matches.select(["id", "id_right", "confidence"]).with_columns(
     pl.col("confidence").alias("score")
 )

@@ -113,7 +113,7 @@ ValueError: "Left source MUST have 'id' column. Found columns: ['email', 'name']
 
 **Strengths:**
 - **Solves real problem**: Entity resolution and deduplication are common data engineering tasks
-- **Simple API**: `matcher.match(rules="email")` is intuitive and comfortable
+- **Simple API**: `matcher.match(on="email")` is intuitive and comfortable
 - **Notebook-friendly**: Works perfectly in Jupyter notebooks
 - **Immediate feedback**: Results are DataFrames you can explore immediately
 - **Component-based**: Easy to swap algorithms and evaluators for experimentation
@@ -121,9 +121,9 @@ ValueError: "Left source MUST have 'id' column. Found columns: ['email', 'name']
 
 **API Evolution:**
 The API has evolved beyond the original Phase 1 plan (which was just `match(field="email")`) to support:
-- Single field: `match(rules="email")`
-- Multi-field rule: `match(rules=["first_name", "last_name"])`
-- Multiple rules: `match(rules=["email", ["first_name", "last_name"]])`
+- Single field: `match(on="email")`
+- Multi-field rule: `match(on=["first_name", "last_name"])`
+- Multiple rules: `match(on="email").refine(on=["first_name", "last_name"])`
 
 This is **good evolution** - it's still simple but more powerful. The normalization logic handles all cases cleanly.
 
@@ -247,7 +247,7 @@ Total: 964 lines across 5 modules
 - **Type hints**: Full type hints on public methods
 - **Modern Python**: Uses f-strings, type hints, Polars idioms
 - **EAFP**: Tries operations, handles exceptions clearly
-- **One obvious way**: `matcher.match(rules="email")` is the obvious way
+- **One obvious way**: `matcher.match(on="email")` is the obvious way
 - **Property decorators**: Uses `@property` for computed attributes (`results.count`)
 - **Module docstrings**: Comprehensive docstrings explain purpose and usage
 
@@ -505,7 +505,7 @@ No critical issues identified. The codebase is in excellent shape.
    - Well-organized module structure
 
 2. **Natural, Pythonic API**
-   - `matcher.match(rules="email")` feels natural
+   - `matcher.match(on="email")` feels natural
    - Works well in notebooks
    - Results are immediately explorable
    - Component-based design enables experimentation

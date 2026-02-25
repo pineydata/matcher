@@ -121,22 +121,22 @@
 **Goal:** Handle larger datasets efficiently by reducing comparisons.
 
 **What Was Built:**
-- ✅ Single blocking key on `Matcher.match(rules=..., blocking_key="zip_code")` and `Deduplicator.match(rules=..., blocking_key=...)`
-- ✅ Blocking on `Matcher.match_fuzzy(..., blocking_key=...)` and `Deduplicator.match_fuzzy(..., blocking_key=...)` (fuzzy runs per block to bound matrix size)
+- ✅ Single blocking key on `Matcher.match(on=..., blocking_key="zip_code")` and `Deduplicator.match(on=..., blocking_key=...)`
+- ✅ Blocking on `Matcher.match(on=[...], matching_algorithm=FuzzyMatcher(...), blocking_key=...)` and `Deduplicator.match(on=[...], matching_algorithm=FuzzyMatcher(...), blocking_key=...)` (fuzzy runs per block to bound matrix size)
 - ✅ Generate candidate pairs within blocks only (common block values only)
 - ✅ Nulls in blocking_key form one block (matched within null block)
 
 **API:**
 ```python
 # Blocking for performance - simple, one key
-results = matcher.match(rules="email", blocking_key="zip_code")
-results = matcher.match_fuzzy(field="name", threshold=0.85, blocking_key="zip_code")
-results = deduplicator.match(rules="email", blocking_key="zip_code")
-results = deduplicator.match_fuzzy(field="name", blocking_key="zip_code")
+results = matcher.match(on="email", blocking_key="zip_code")
+results = matcher.match(on=["name"], matching_algorithm=FuzzyMatcher(threshold=0.85), blocking_key="zip_code")
+results = deduplicator.match(on="email", blocking_key="zip_code")
+results = deduplicator.match(on=["name"], matching_algorithm=FuzzyMatcher(threshold=0.85), blocking_key="zip_code")
 ```
 
 **Success Criteria:**
-- [x] Optional blocking_key on match and match_fuzzy (Matcher and Deduplicator)
+- [x] Optional blocking_key on match (and on match with FuzzyMatcher) for Matcher and Deduplicator
 - [x] Same matches as without blocking when blocks align with match keys
 - [ ] Can process 1M records in <30 minutes (add benchmarks when needed)
 - [ ] Blocking reduces comparisons by >90% (measure with benchmarks)
@@ -155,7 +155,7 @@ results = deduplicator.match_fuzzy(field="name", blocking_key="zip_code")
 **Goal:** Handle typos and variations ("John Smith" vs "J. Smith").
 
 **What Was Built:**
-- ✅ `Matcher.match_fuzzy(field=..., threshold=0.85)` and `Deduplicator.match_fuzzy()`
+- ✅ `Matcher.match(on=[...], matching_algorithm=FuzzyMatcher(threshold=0.85))` and `Deduplicator.match(on=[...], matching_algorithm=FuzzyMatcher(...))`
 - ✅ Single algorithm (Jaro-Winkler via rapidfuzz), single threshold
 - ✅ Vectorized pipeline: Polars → Arrow → rapidfuzz `cdist` (no row loops); multi-core
 - ✅ `rapidfuzz`, `pyarrow`, `numpy` dependencies; simple normalization (lowercase, trim)
@@ -165,9 +165,9 @@ results = deduplicator.match_fuzzy(field="name", blocking_key="zip_code")
 **API:**
 ```python
 # Single-field fuzzy matching - simple
-results = matcher.match_fuzzy(
-    field="name",
-    threshold=0.85  # That's it
+results = matcher.match(
+    on=["name"],
+    matching_algorithm=FuzzyMatcher(threshold=0.85)
 )
 ```
 
@@ -200,7 +200,7 @@ results = matcher.match_fuzzy(
 
 **API (export):**
 ```python
-results = matcher.match_fuzzy(field="name", threshold=0.85)
+results = matcher.match(on=["name"], matching_algorithm=FuzzyMatcher(threshold=0.85))
 results.export_for_review("matches_for_review.csv")
 results.sample(n=50, seed=42).export_for_review("sample_for_review.csv")
 ```
