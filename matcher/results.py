@@ -312,28 +312,54 @@ class MatchResults:
                 combined = combined.drop(to_drop)
             # Merge provenance: first non-null per pair from existing then new.
             score_on_cols = [c for c in new_matches.columns if is_score_on_column(c)]
-            if score_on_cols:
-                new_scores = new_matches.select([left_id, right_id_right] + score_on_cols)
-                combined = combined.join(new_scores, on=[left_id, right_id_right], how="left", suffix="_new")
-                existing_score_on = [c for c in self.matches.columns if is_score_on_column(c)]
-                if existing_score_on:
-                    existing_scores = self.matches.select([left_id, right_id_right] + existing_score_on)
-                    combined = combined.join(existing_scores, on=[left_id, right_id_right], how="left", suffix="_ex")
-                    for col in set(score_on_cols) | set(existing_score_on):
-                        ex_col, new_col = f"{col}_ex", f"{col}_new"
-                        if ex_col in combined.columns and new_col in combined.columns:
-                            combined = combined.with_columns(
-                                pl.coalesce(pl.col(ex_col), pl.col(new_col)).alias(col)
-                            )
-                        elif new_col in combined.columns:
-                            combined = combined.with_columns(pl.col(new_col).alias(col))
-                        elif ex_col in combined.columns:
-                            combined = combined.with_columns(pl.col(ex_col).alias(col))
-                    combined = combined.drop([c for c in combined.columns if c.endswith("_ex") or c.endswith("_new")])
+            existing_score_on = [c for c in self.matches.columns if is_score_on_column(c)]
+            all_score_on = sorted(set(score_on_cols) | set(existing_score_on))
+            if all_score_on:
+                # Build one (left_id, right_id_right, ...score/on) table then join once.
+                existing_scores = (
+                    self.matches.select([left_id, right_id_right] + existing_score_on)
+                    if existing_score_on
+                    else None
+                )
+                new_scores = (
+                    new_matches.select([left_id, right_id_right] + score_on_cols)
+                    if score_on_cols
+                    else None
+                )
+                if existing_scores is not None and new_scores is not None:
+                    merged = existing_scores.join(
+                        new_scores, on=[left_id, right_id_right], how="full", suffix="_new"
+                    )
+                    # Full join: rows from right-only have null keys from left; coalesce so every row has keys
+                    key_new_left = f"{left_id}_new"
+                    key_new_right = f"{right_id_right}_new"
+                    if key_new_left not in merged.columns or key_new_right not in merged.columns:
+                        raise AssertionError(
+                            "Full join with suffix=_new should produce key_new columns; "
+                            "cannot coalesce join keys for refine provenance."
+                        )
+                    merged = merged.with_columns(
+                        pl.coalesce(pl.col(left_id), pl.col(key_new_left)).alias(left_id),
+                        pl.coalesce(pl.col(right_id_right), pl.col(key_new_right)).alias(right_id_right),
+                    )
+                    merged = merged.select(
+                        [left_id, right_id_right]
+                        + [
+                            pl.coalesce(pl.col(c), pl.col(f"{c}_new")).alias(c)
+                            if f"{c}_new" in merged.columns
+                            else pl.col(c)
+                            for c in all_score_on
+                        ]
+                    )
+                    combined = combined.join(merged, on=[left_id, right_id_right], how="left")
+                elif existing_scores is not None:
+                    combined = combined.join(existing_scores, on=[left_id, right_id_right], how="left")
                 else:
-                    for col in score_on_cols:
-                        combined = combined.with_columns(pl.col(f"{col}_new").alias(col))
-                    combined = combined.drop([f"{c}_new" for c in score_on_cols])
+                    combined = combined.join(new_scores, on=[left_id, right_id_right], how="left")
+            elif existing_score_on:
+                # New run added no score/on (e.g. custom algo); preserve existing provenance.
+                existing_scores = self.matches.select([left_id, right_id_right] + existing_score_on)
+                combined = combined.join(existing_scores, on=[left_id, right_id_right], how="left")
         else:
             combined = self.matches
 
