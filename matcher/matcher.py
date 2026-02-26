@@ -369,13 +369,33 @@ class Matcher:
             if cols_to_drop:
                 result = result.drop(cols_to_drop)
             # Preserve confidence from algorithm output (e.g. FuzzyMatcher) for backward compat.
-            # _add_provenance_columns also sets confidence on the final result; this join restores
-            # it after we rejoin from pairs (so it is not redundant).
-            for m in all_matches:
-                if "confidence" in m.columns and self.left_id in m.columns and right_id_right in m.columns:
-                    conf = m.select(pl.col(self.left_id), pl.col(right_id_right), pl.col("confidence"))
-                    result = result.join(conf, on=[self.left_id, right_id_right], how="left")
-                    break
+            # _add_provenance_columns uses it for fuzzy_score. Merge from all blocks so pairs
+            # from any block get a value (not just the first block).
+            conf_parts = [
+                m.select(pl.col(self.left_id), pl.col(right_id_right), pl.col("confidence"))
+                for m in all_matches
+                if "confidence" in m.columns
+                and self.left_id in m.columns
+                and right_id_right in m.columns
+                and m.height > 0
+            ]
+            if conf_parts:
+                conf_merged = (
+                    pl.concat(conf_parts)
+                    .group_by([self.left_id, right_id_right])
+                    .agg(pl.col("confidence").max())  # same pair in multiple blocks: take max
+                )
+                result = result.join(conf_merged, on=[self.left_id, right_id_right], how="left")
+            elif any(
+                "confidence" in m.columns and self.left_id in m.columns and right_id_right in m.columns
+                for m in all_matches
+            ):
+                # Schema consistency: algo has confidence but no block had matches; add column (empty or nulls).
+                result = result.with_columns(
+                    pl.Series("confidence", [], dtype=pl.Float64).alias("confidence")
+                    if result.height == 0
+                    else pl.lit(None).cast(pl.Float64).alias("confidence")
+                )
             all_results.append(result)
 
         # Add direct matches (no id columns)

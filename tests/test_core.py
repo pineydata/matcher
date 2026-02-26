@@ -3,6 +3,7 @@
 import polars as pl
 import pytest
 from matcher import Matcher, Deduplicator, MatchResults, FuzzyMatcher
+from matcher.algorithms import MatchingAlgorithm
 
 
 def test_matcher_initialization_with_dataframes():
@@ -325,6 +326,95 @@ def test_refine_entity_resolution_adds_name_matches():
     assert 10 in right_ids and 20 in right_ids
     # Unmatched left (id=3) got no new match
     assert 3 not in left_ids
+
+
+def test_refine_preserves_score_and_on_for_all_pairs():
+    """Refine: exact_score and exact_on are non-null for both initial and refined pairs."""
+    left = pl.DataFrame({
+        "id": [1, 2, 3],
+        "email": ["a@test.com", "nomatch@test.com", "nomatch2@test.com"],
+        "first_name": ["Alice", "Bob", "Charlie"],
+        "last_name": ["Smith", "Jones", "Brown"],
+    })
+    right = pl.DataFrame({
+        "id": [10, 20, 30],
+        "email": ["a@test.com", "b@test.com", "c@test.com"],
+        "first_name": ["Alice", "Bob", "Xavier"],
+        "last_name": ["Smith", "Jones", "Y"],
+    })
+    matcher = Matcher(left=left, right=right, left_id="id", right_id="id")
+    refined = matcher.match(on="email").refine(on=["first_name", "last_name"])
+    assert refined.count == 2
+    assert "exact_score" in refined.matches.columns and "exact_on" in refined.matches.columns
+    assert refined.matches.filter(pl.col("exact_score").is_null()).height == 0
+    assert refined.matches.filter(pl.col("exact_on").is_null()).height == 0
+
+
+def test_refine_with_blocking_preserves_score_and_on():
+    """Refine with blocking_key: score/on non-null for both initial and refined pairs (all blocks)."""
+    left = pl.DataFrame({
+        "id": [1, 2, 3],
+        "email": ["a@test.com", "nomatch@test.com", "nomatch2@test.com"],
+        "first_name": ["Alice", "Bob", "Bob"],
+        "last_name": ["Smith", "Jones", "Jones"],
+        "zip_code": ["10001", "10001", "10002"],
+    })
+    right = pl.DataFrame({
+        "id": [10, 20, 30],
+        "email": ["a@test.com", "b@test.com", "c@test.com"],
+        "first_name": ["Alice", "Bob", "Xavier"],
+        "last_name": ["Smith", "Jones", "Y"],
+        "zip_code": ["10001", "10001", "10002"],
+    })
+    matcher = Matcher(left=left, right=right, left_id="id", right_id="id")
+    refined = matcher.match(on="email").refine(
+        on=["first_name", "last_name"], blocking_key="zip_code"
+    )
+    assert refined.count == 2
+    assert refined.matches.filter(pl.col("exact_score").is_null()).height == 0
+    assert refined.matches.filter(pl.col("exact_on").is_null()).height == 0
+
+
+def test_refine_with_custom_algo_preserves_existing_score_and_on():
+    """Refine with a matcher whose algorithm has no kind: existing pairs keep exact_score/exact_on."""
+    # Custom algo with kind=None (no score/on columns added); exact join on rule fields like ExactMatcher
+    class NoKindAlgo(MatchingAlgorithm):
+        kind = None
+
+        def match(self, left, right, rule, left_id, right_id):
+            field = rule[0] if len(rule) == 1 else rule
+            result = left.join(right, on=field, how="inner", suffix="_right")
+            right_id_right = f"{right_id}_right"
+            if right_id_right not in result.columns and right_id in right.columns:
+                right_ids = right.select(
+                    [field] if isinstance(field, str) else field,
+                    pl.col(right_id).alias(right_id_right),
+                )
+                result = result.join(right_ids, on=field, how="left")
+            return result
+
+    left = pl.DataFrame({
+        "id": [1, 2, 3],
+        "email": ["a@test.com", "nomatch@test.com", "nomatch2@test.com"],
+        "first_name": ["Alice", "Bob", "Charlie"],
+        "last_name": ["Smith", "Jones", "Brown"],
+    })
+    right = pl.DataFrame({
+        "id": [10, 20, 30],
+        "email": ["a@test.com", "b@test.com", "c@test.com"],
+        "first_name": ["Alice", "Bob", "Xavier"],
+        "last_name": ["Smith", "Jones", "Y"],
+    })
+    matcher_default = Matcher(left=left, right=right, left_id="id", right_id="id")
+    matcher_custom = Matcher(left=left, right=right, left_id="id", right_id="id", matching_algorithm=NoKindAlgo())
+    results = matcher_default.match(on="email")  # (1, 10) with exact_score, exact_on
+    refined = results.refine(on=["first_name", "last_name"], matcher=matcher_custom)  # adds (2, 20) via custom algo
+    assert refined.count == 2
+    # Initial pair (1, 10) must keep provenance from match(on="email")
+    row_1_10 = refined.matches.filter(pl.col("id") == 1)
+    assert row_1_10.height == 1
+    assert row_1_10.select("exact_score").item() == 1.0
+    assert row_1_10.select("exact_on").item() == "email"
 
 
 def test_refine_deduplication_no_self_matches():
@@ -813,6 +903,30 @@ def test_match_fuzzy_blocking_same_as_no_blocking_when_one_block():
         on=["name"], matching_algorithm=FuzzyMatcher(threshold=0.5), blocking_key="z"
     )
     assert no_block.count == with_block.count
+
+
+def test_match_fuzzy_blocking_score_and_on_populated_for_all_blocks():
+    """Blocking + FuzzyMatcher: fuzzy_score and fuzzy_on are non-null for every match (all blocks)."""
+    # Two blocks: block "a" has one pair, block "b" has another; confidence must come from both
+    left = pl.DataFrame({
+        "id": [1, 2],
+        "name": ["Alice", "Bob"],
+        "z": ["a", "b"],
+    })
+    right = pl.DataFrame({
+        "id": [10, 20],
+        "name": ["Alicia", "Bobby"],
+        "z": ["a", "b"],
+    })
+    matcher = Matcher(left=left, right=right, left_id="id", right_id="id")
+    results = matcher.match(
+        on=["name"],
+        matching_algorithm=FuzzyMatcher(threshold=0.5),
+        blocking_key="z",
+    )
+    assert results.count == 2
+    assert results.matches.filter(pl.col("fuzzy_score").is_null()).height == 0
+    assert results.matches.filter(pl.col("fuzzy_on").is_null()).height == 0
 
 
 def test_deduplicator_match_with_blocking_key_list():
