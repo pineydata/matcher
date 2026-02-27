@@ -31,7 +31,7 @@ def test_evaluation_with_entity_resolution(sample_data_dir, ground_truth_30_pair
     left_df = pl.read_parquet(left_path)
     right_df = pl.read_parquet(right_path)
     matcher = Matcher(left=left_df, right=right_df, left_id="id", right_id="id")
-    results = matcher.match(on="email")
+    results = matcher.match(match_on="email")
 
     ground_truth = ground_truth_30_pairs
 
@@ -54,7 +54,7 @@ def test_evaluation_with_deduplication(sample_data_dir):
     # Load data and create deduplicator
     df = pl.read_parquet(source_path)
     deduplicator = Deduplicator(source=df, id_col="id")
-    results = deduplicator.match(on="email")
+    results = deduplicator.match(match_on="email")
 
     # For deduplication, we need to create ground truth from known duplicate groups
     # Load the data to understand the structure
@@ -102,7 +102,7 @@ def test_evaluation_with_custom_evaluator(sample_data_dir, ground_truth_30_pairs
     left_df = pl.read_parquet(left_path)
     right_df = pl.read_parquet(right_path)
     matcher = Matcher(left=left_df, right=right_df, left_id="id", right_id="id")
-    results = matcher.match(on="email")
+    results = matcher.match(match_on="email")
 
     ground_truth = ground_truth_30_pairs
 
@@ -124,7 +124,7 @@ def test_evaluation_with_parquet_ground_truth(sample_data_dir, ground_truth_30_p
     left_df = pl.read_parquet(left_path)
     right_df = pl.read_parquet(right_path)
     matcher = Matcher(left=left_df, right=right_df, left_id="id", right_id="id")
-    results = matcher.match(on="email")
+    results = matcher.match(match_on="email")
 
     # Save to parquet, load back (simulates user loading from file)
     ground_truth_path = tmp_path / "ground_truth.parquet"
@@ -144,7 +144,7 @@ def test_evaluation_with_csv_ground_truth(sample_data_dir, ground_truth_30_pairs
     left_df = pl.read_parquet(left_path)
     right_df = pl.read_parquet(right_path)
     matcher = Matcher(left=left_df, right=right_df, left_id="id", right_id="id")
-    results = matcher.match(on="email")
+    results = matcher.match(match_on="email")
 
     csv_path = tmp_path / "ground_truth.csv"
     ground_truth_30_pairs.write_csv(csv_path)
@@ -165,7 +165,7 @@ def test_evaluation_error_handling(sample_data_dir):
     left_df = pl.read_parquet(left_path)
     right_df = pl.read_parquet(right_path)
     matcher = Matcher(left=left_df, right=right_df, left_id="id", right_id="id")
-    results = matcher.match(on="email")
+    results = matcher.match(match_on="email")
 
     # Ground truth with wrong column names
     bad_ground_truth = pl.DataFrame({
@@ -187,7 +187,7 @@ def test_find_best_threshold(sample_data_dir, ground_truth_30_pairs):
 
     # Fuzzy with low threshold so we have scored pairs to sweep
     from matcher import FuzzyMatcher
-    results = matcher.match(on=["first_name"], matching_algorithm=FuzzyMatcher(threshold=0.5))
+    results = matcher.match(match_on=["first_name"], matching_algorithm=FuzzyMatcher(threshold=0.5))
     ground_truth = ground_truth_30_pairs
 
     best = find_best_threshold(

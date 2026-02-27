@@ -17,7 +17,7 @@ Usage Context:
 - Algorithms are used by Matcher and Deduplicator classes to perform the actual matching.
 - Each algorithm processes one rule at a time (a rule is a list of fields).
 - The Matcher class handles combining results from multiple rules (OR logic).
-- Use Matcher.match(on=[field], matching_algorithm=FuzzyMatcher(threshold=...)).
+- Use Matcher.match(match_on=[field], matching_algorithm=FuzzyMatcher(threshold=...)).
 
 Design Notes:
 - Algorithms operate on in-memory Polars DataFrames only.
@@ -202,6 +202,9 @@ class FuzzyMatcher(MatchingAlgorithm):
         right_valid = right.filter(pl.col(field).is_not_null())
         if left_valid.height == 0 or right_valid.height == 0:
             return self._empty_result(left, right, left_id, right_id)
+
+        from matcher.oom import warn_fuzzy_matrix_size
+        warn_fuzzy_matrix_size(left_valid.height, right_valid.height)
 
         pairs_df = self._fuzzy_pairs(left_valid, right_valid, field, left_id, right_id)
         if pairs_df is None or pairs_df.height == 0:

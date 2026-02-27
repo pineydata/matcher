@@ -23,21 +23,21 @@ def test_entity_resolution_with_sample_data(sample_data_dir):
 
     # Email-only rule: should find 10 email-only + 10 mixed = 20 matches
     # (multi-field matches use address+zip, not email, so they don't match on email alone)
-    results = matcher.match(on="email")
+    results = matcher.match(match_on="email")
     assert results.count == 20, f"Expected 20 matches with email rule, got {results.count}"
 
     # Name-only rule: should find at least 10 name-only + 10 mixed = 20 matches
     # (may find more due to overlaps with other match types)
-    results = matcher.match(on=["first_name", "last_name"])
+    results = matcher.match(match_on=["first_name", "last_name"])
     assert results.count >= 20, f"Expected at least 20 matches with name rule, got {results.count}"
 
     # Multi-field rule: should find at least 10 multi-field matches (address + zip_code)
     # (may find more due to overlaps with mixed matches)
-    results = matcher.match(on=["address", "zip_code"])
+    results = matcher.match(match_on=["address", "zip_code"])
     assert results.count >= 10, f"Expected at least 10 matches with address+zip rule, got {results.count}"
 
     # Multiple rules (cascading): should find all 40 matches (one per left row)
-    results = matcher.match(on="email").refine(on=["first_name", "last_name"]).refine(on=["address", "zip_code"])
+    results = matcher.match(match_on="email").refine(match_on=["first_name", "last_name"]).refine(match_on=["address", "zip_code"])
     assert results.count >= 40, f"Expected at least 40 matches with cascading rules, got {results.count}"
 
     # Verify matches are correct (all should have same email)
@@ -52,7 +52,7 @@ def test_deduplication_with_sample_data(sample_data_dir):
 
     df = pl.read_parquet(source_path)
     deduplicator = Deduplicator(source=df, id_col="id")
-    results = deduplicator.match(on="email")
+    results = deduplicator.match(match_on="email")
 
     assert results.count > 0, "Should find some duplicate pairs"
     assert "email" in results.matches.columns
@@ -75,7 +75,7 @@ def test_deduplication_evaluate_with_ground_truth(sample_data_dir):
     ground_truth = pl.DataFrame(ground_truth_data)
 
     deduplicator = Deduplicator(source=df, id_col="id")
-    results = deduplicator.match(on="email")
+    results = deduplicator.match(match_on="email")
 
     metrics = results.evaluate(ground_truth, left_id_col="id", right_id_col="id_right")
 
@@ -100,7 +100,7 @@ def test_entity_resolution_ground_truth_validation(sample_data_dir):
     })
 
     matcher = Matcher(left=left_df, right=right_df, left_id="id", right_id="id")
-    results = matcher.match(on="email").refine(on=["first_name", "last_name"]).refine(on=["address", "zip_code"])
+    results = matcher.match(match_on="email").refine(match_on=["first_name", "last_name"]).refine(match_on=["address", "zip_code"])
 
     # Use evaluate() as the standard way to judge quality (improvement workflow)
     metrics = results.evaluate(ground_truth, left_id_col="id", right_id_col="id_right")
@@ -126,7 +126,7 @@ def test_match_fuzzy_entity_resolution_with_sample_data(sample_data_dir):
 
     # Fuzzy on first_name: known pairs share same first_name (name-only 10 + mixed 10 = 20)
     # Exact same string gives confidence 1.0; we may get more from similar names
-    results = matcher.match(on=["first_name"], matching_algorithm=FuzzyMatcher(threshold=0.85))
+    results = matcher.match(match_on=["first_name"], matching_algorithm=FuzzyMatcher(threshold=0.85))
     assert results.count >= 20, f"Expected at least 20 fuzzy matches on first_name, got {results.count}"
     assert "confidence" in results.matches.columns
     assert "id_right" in results.matches.columns
@@ -141,7 +141,7 @@ def test_match_fuzzy_deduplication_with_sample_data(sample_data_dir):
     df = pl.read_parquet(source_path)
     deduplicator = Deduplicator(source=df, id_col="id")
     results = deduplicator.match(
-        on=["first_name"],
+        match_on=["first_name"],
         matching_algorithm=FuzzyMatcher(threshold=0.85),
     )
 
