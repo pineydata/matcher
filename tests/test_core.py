@@ -26,7 +26,7 @@ def test_match_entity_resolution():
     right = pl.DataFrame({"id": [3, 4], "email": ["a@test.com", "c@test.com"]})
 
     matcher = Matcher(left=left, right=right, left_id="id", right_id="id")
-    results = matcher.match(on="email")
+    results = matcher.match(match_on="email")
 
     assert results.count == 1
     assert "email" in results.matches.columns
@@ -40,7 +40,7 @@ def test_match_missing_field():
     matcher = Matcher(left=left, right=right, left_id="id", right_id="id")
 
     with pytest.raises(ValueError, match="Field\\(s\\) .* not found in left source"):
-        matcher.match(on="name")
+        matcher.match(match_on="name")
 
 
 def test_match_results_count():
@@ -142,7 +142,7 @@ def test_match_multi_field_entity_resolution():
     })
 
     matcher = Matcher(left=left, right=right, left_id="id", right_id="id")
-    results = matcher.match(on=["email", "zip_code"])
+    results = matcher.match(match_on=["email", "zip_code"])
 
     # Should find 2 matches: (a@test.com, 10001) and (c@test.com, 10001)
     # b@test.com doesn't match because zip codes differ (10002 vs 10003)
@@ -160,7 +160,7 @@ def test_match_multi_field_deduplication():
     })
 
     deduplicator = Deduplicator(source=df, id_col="id")
-    results = deduplicator.match(on=["email", "zip_code"])
+    results = deduplicator.match(match_on=["email", "zip_code"])
 
     # Should find 1 duplicate pair: records 1 and 2 match on both email and zip_code
     # Records 3 and 4 have same email but different zip_code, so they don't match
@@ -177,7 +177,7 @@ def test_match_multi_field_missing_field():
     matcher = Matcher(left=left, right=right, left_id="id", right_id="id")
 
     with pytest.raises(ValueError, match="Field\\(s\\) .* not found in right source"):
-        matcher.match(on=["email", "zip_code"])
+        matcher.match(match_on=["email", "zip_code"])
 
 
 def test_match_multi_field_empty_list():
@@ -188,7 +188,7 @@ def test_match_multi_field_empty_list():
     matcher = Matcher(left=left, right=right, left_id="id", right_id="id")
 
     with pytest.raises(ValueError, match="on must"):
-        matcher.match(on=[])
+        matcher.match(match_on=[])
 
 
 def test_match_rules_entity_resolution():
@@ -207,7 +207,7 @@ def test_match_rules_entity_resolution():
     })
 
     matcher = Matcher(left=left, right=right, left_id="id", right_id="id")
-    results = matcher.match(on="email").refine(on=["first_name", "last_name"])
+    results = matcher.match(match_on="email").refine(match_on=["first_name", "last_name"])
 
     # Should find:
     # - id=2 matches id=5 via email (b@test.com)
@@ -228,7 +228,7 @@ def test_match_rules_deduplication():
     })
 
     deduplicator = Deduplicator(source=df, id_col="id")
-    results = deduplicator.match(on="email").refine(on=["first_name", "last_name"])
+    results = deduplicator.match(match_on="email").refine(match_on=["first_name", "last_name"])
 
     # Should find:
     # - id=1 and id=3 match via name (Alice Smith)
@@ -247,7 +247,7 @@ def test_match_rules_empty_list():
     matcher = Matcher(left=left, right=right, left_id="id", right_id="id")
 
     with pytest.raises(ValueError, match="on must"):
-        matcher.match(on=[])
+        matcher.match(match_on=[])
 
 
 def test_match_rules_multiple_rules_raises():
@@ -256,7 +256,7 @@ def test_match_rules_multiple_rules_raises():
     right = pl.DataFrame({"id": [2], "email": ["a@x.com"], "name": ["A"]})
     matcher = Matcher(left=left, right=right, left_id="id", right_id="id")
     with pytest.raises(ValueError, match="Only a single rule"):
-        matcher.match(on=[["email"], ["name"]])
+        matcher.match(match_on=[["email"], ["name"]])
 
 
 def test_match_rules_invalid_rule():
@@ -267,10 +267,10 @@ def test_match_rules_invalid_rule():
     matcher = Matcher(left=left, right=right, left_id="id", right_id="id")
 
     with pytest.raises(ValueError, match="on must contain at least one field"):
-        matcher.match(on=[[]])  # Empty rule
+        matcher.match(match_on=[[]])  # Empty rule
 
     # String rules are now valid
-    results = matcher.match(on=["email"])
+    results = matcher.match(match_on=["email"])
     assert results.count == 1
 
 
@@ -290,7 +290,7 @@ def test_match_rules_string_single_field():
     })
 
     matcher = Matcher(left=left, right=right, left_id="id", right_id="id")
-    results = matcher.match(on="email").refine(on=["first_name", "last_name"])
+    results = matcher.match(match_on="email").refine(match_on=["first_name", "last_name"])
     assert results.count >= 1
 
 
@@ -312,12 +312,12 @@ def test_refine_entity_resolution_adds_name_matches():
         "last_name": ["Smith", "Jones", "Y"],
     })
     matcher = Matcher(left=left, right=right, left_id="id", right_id="id")
-    results = matcher.match(on="email")
+    results = matcher.match(match_on="email")
     # Only (1, 10) match on email
     assert results.count == 1
     assert results.matches["id"].to_list() == [1]
 
-    refined = results.refine(on=["first_name", "last_name"])
+    refined = results.refine(match_on=["first_name", "last_name"])
     # Original (1, 10) + refined: (2, 20) on name Bob Jones. Left id=3 has no name match.
     assert refined.count == 2
     left_ids = refined.matches["id"].to_list()
@@ -343,15 +343,34 @@ def test_refine_preserves_score_and_on_for_all_pairs():
         "last_name": ["Smith", "Jones", "Y"],
     })
     matcher = Matcher(left=left, right=right, left_id="id", right_id="id")
-    refined = matcher.match(on="email").refine(on=["first_name", "last_name"])
+    refined = matcher.match(match_on="email").refine(match_on=["first_name", "last_name"])
     assert refined.count == 2
     assert "exact_score" in refined.matches.columns and "exact_on" in refined.matches.columns
     assert refined.matches.filter(pl.col("exact_score").is_null()).height == 0
     assert refined.matches.filter(pl.col("exact_on").is_null()).height == 0
 
 
+def test_refine_accepts_nested_list_on():
+    """refine(match_on=[["a", "b"]]) is normalized like match(); same as refine(match_on=["a", "b"])."""
+    left = pl.DataFrame({
+        "id": [1, 2],
+        "email": ["a@x.com", "b@x.com"],
+        "first_name": ["Alice", "Bob"],
+        "last_name": ["X", "Y"],
+    })
+    right = pl.DataFrame({
+        "id": [10, 20],
+        "email": ["a@x.com", "other@x.com"],
+        "first_name": ["Alice", "Bob"],
+        "last_name": ["X", "Y"],
+    })
+    matcher = Matcher(left=left, right=right, left_id="id", right_id="id")
+    refined = matcher.match(match_on="email").refine(match_on=[["first_name", "last_name"]])
+    assert refined.count == 2
+
+
 def test_refine_with_blocking_preserves_score_and_on():
-    """Refine with blocking_key: score/on non-null for both initial and refined pairs (all blocks)."""
+    """Refine with block_on: score/on non-null for both initial and refined pairs (all blocks)."""
     left = pl.DataFrame({
         "id": [1, 2, 3],
         "email": ["a@test.com", "nomatch@test.com", "nomatch2@test.com"],
@@ -367,8 +386,8 @@ def test_refine_with_blocking_preserves_score_and_on():
         "zip_code": ["10001", "10001", "10002"],
     })
     matcher = Matcher(left=left, right=right, left_id="id", right_id="id")
-    refined = matcher.match(on="email").refine(
-        on=["first_name", "last_name"], blocking_key="zip_code"
+    refined = matcher.match(match_on="email").refine(
+        match_on=["first_name", "last_name"], block_on="zip_code"
     )
     assert refined.count == 2
     assert refined.matches.filter(pl.col("exact_score").is_null()).height == 0
@@ -407,8 +426,8 @@ def test_refine_with_custom_algo_preserves_existing_score_and_on():
     })
     matcher_default = Matcher(left=left, right=right, left_id="id", right_id="id")
     matcher_custom = Matcher(left=left, right=right, left_id="id", right_id="id", matching_algorithm=NoKindAlgo())
-    results = matcher_default.match(on="email")  # (1, 10) with exact_score, exact_on
-    refined = results.refine(on=["first_name", "last_name"], matcher=matcher_custom)  # adds (2, 20) via custom algo
+    results = matcher_default.match(match_on="email")  # (1, 10) with exact_score, exact_on
+    refined = results.refine(match_on=["first_name", "last_name"], matcher=matcher_custom)  # adds (2, 20) via custom algo
     assert refined.count == 2
     # Initial pair (1, 10) must keep provenance from match(on="email")
     row_1_10 = refined.matches.filter(pl.col("id") == 1)
@@ -426,11 +445,11 @@ def test_refine_deduplication_no_self_matches():
         "last_name": ["Smith", "Jones", "Jones", "Jones"],
     })
     deduplicator = Deduplicator(source=df, id_col="id")
-    results = deduplicator.match(on="email")
+    results = deduplicator.match(match_on="email")
     # (1,2) or (2,1) if same email - we have only a@ and b@ unique, so maybe 0 dupes on email
     # Set up so email gives no/some matches, then refine on name gives (2,3), (2,4), (3,4) etc.
-    results = deduplicator.match(on="email")
-    refined = results.refine(on=["first_name", "last_name"])
+    results = deduplicator.match(match_on="email")
+    refined = results.refine(match_on=["first_name", "last_name"])
     id_right = "id_right"
     assert id_right in refined.matches.columns
     self_matches = refined.matches.filter(pl.col("id") == pl.col(id_right))
@@ -442,10 +461,10 @@ def test_refine_all_matched_returns_same():
     left = pl.DataFrame({"id": [1, 2], "email": ["a@test.com", "b@test.com"]})
     right = pl.DataFrame({"id": [3, 4], "email": ["a@test.com", "b@test.com"]})
     matcher = Matcher(left=left, right=right, left_id="id", right_id="id")
-    results = matcher.match(on="email")
+    results = matcher.match(match_on="email")
     assert results.count == 2
 
-    refined = results.refine(on=["email"])
+    refined = results.refine(match_on=["email"])
     assert refined.count == 2
     assert refined.matches.height == results.matches.height
     # Same set of (id, id_right) pairs
@@ -455,7 +474,7 @@ def test_refine_all_matched_returns_same():
 
 
 def test_refine_with_blocking_key():
-    """Refine with blocking_key runs the rule only within blocks (same blocking_key value)."""
+    """Refine with block_on runs the rule only within blocks (same block_on value)."""
     left = pl.DataFrame({
         "id": [1, 2, 3],
         "email": ["a@test.com", "nomatch@test.com", "nomatch2@test.com"],
@@ -471,11 +490,11 @@ def test_refine_with_blocking_key():
         "zip_code": ["10001", "10001", "10002"],
     })
     matcher = Matcher(left=left, right=right, left_id="id", right_id="id")
-    results = matcher.match(on="email")
+    results = matcher.match(match_on="email")
     # Only (1, 10) match on email. Unmatched: left 2 and 3.
     assert results.count == 1
     # Refine on name within zip: in 10001 block (left 2, right 10, 20) -> (2, 20) Bob Jones. In 10002 (left 3, right 30) -> no name match.
-    refined = results.refine(on=["first_name", "last_name"], blocking_key="zip_code")
+    refined = results.refine(match_on=["first_name", "last_name"], block_on="zip_code")
     assert refined.count == 2
     left_ids = refined.matches["id"].to_list()
     assert 1 in left_ids and 2 in left_ids
@@ -483,7 +502,7 @@ def test_refine_with_blocking_key():
 
 
 def test_refine_with_blocking_key_list():
-    """refine(blocking_key=[...]) uses multiple keys; matches only within same (zip, state) block."""
+    """refine(block_on=[...]) uses multiple keys; matches only within same (zip, state) block."""
     left = pl.DataFrame({
         "id": [1, 2, 3],
         "email": ["a@test.com", "nomatch@test.com", "nomatch2@test.com"],
@@ -501,10 +520,10 @@ def test_refine_with_blocking_key_list():
         "state": ["NY", "CA", "CA"],
     })
     matcher = Matcher(left=left, right=right, left_id="id", right_id="id")
-    results = matcher.match(on="email")
+    results = matcher.match(match_on="email")
     # Unmatched: left 2 (10001, NY), 3 (10001, CA). Refine by name within (zip_code, state).
     # Block (10001, NY): left 2, right 10 only -> no name match. Block (10001, CA): left 3, right 20, 30 -> (3,20) and (3,30) Bob Jones.
-    refined = results.refine(on=["first_name", "last_name"], blocking_key=["zip_code", "state"])
+    refined = results.refine(match_on=["first_name", "last_name"], block_on=["zip_code", "state"])
     assert refined.count == 3  # (1,10), (3,20), (3,30)
     assert 1 in refined.matches["id"].to_list() and 3 in refined.matches["id"].to_list()
     assert 2 not in refined.matches["id"].to_list()
@@ -518,7 +537,7 @@ def test_refine_raises_when_no_matcher_available():
     results = MatchResults(matches, original_left=left)  # no source= stored
 
     with pytest.raises(ValueError, match="refine\\(\\) requires a matcher"):
-        results.refine(on=["email"])
+        results.refine(match_on=["email"])
 
 
 def test_refine_raises_when_original_left_missing():
@@ -530,7 +549,7 @@ def test_refine_raises_when_original_left_missing():
     matcher = Matcher(left=left, right=right, left_id="id", right_id="id")
 
     with pytest.raises(ValueError, match="original left data not available"):
-        results.refine(on=["email"], matcher=matcher)
+        results.refine(match_on=["email"], matcher=matcher)
 
 
 def test_refine_raises_when_matches_lack_id_structure():
@@ -543,7 +562,7 @@ def test_refine_raises_when_matches_lack_id_structure():
     results = MatchResults(matches_no_right, original_left=left)
 
     with pytest.raises(ValueError, match="Expected.*id.*and.*id_right"):
-        results.refine(on=["email"], matcher=matcher)
+        results.refine(match_on=["email"], matcher=matcher)
 
 
 # --- Fuzzy matching (match with FuzzyMatcher) ---
@@ -560,7 +579,7 @@ def test_match_fuzzy_basic():
         "name": ["John Smith", "J. Smith"],  # typo/variant
     })
     matcher = Matcher(left=left, right=right, left_id="id", right_id="id")
-    results = matcher.match(on=["name"], matching_algorithm=FuzzyMatcher(threshold=0.85))
+    results = matcher.match(match_on=["name"], matching_algorithm=FuzzyMatcher(threshold=0.85))
     assert results.count >= 1
     assert "confidence" in results.matches.columns
     assert "id" in results.matches.columns
@@ -578,7 +597,7 @@ def test_match_fuzzy_typos():
     left = pl.DataFrame({"id": [1], "name": ["Alice Johnson"]})
     right = pl.DataFrame({"id": [2], "name": ["Alicia Johnson"]})  # typo
     matcher = Matcher(left=left, right=right, left_id="id", right_id="id")
-    results = matcher.match(on=["name"], matching_algorithm=FuzzyMatcher(threshold=0.80))
+    results = matcher.match(match_on=["name"], matching_algorithm=FuzzyMatcher(threshold=0.80))
     assert results.count >= 1
     assert results.matches["confidence"][0] >= 0.80
 
@@ -589,7 +608,7 @@ def test_match_fuzzy_missing_field_left():
     right = pl.DataFrame({"id": [2], "email": ["b@test.com"], "name": ["Bob"]})
     matcher = Matcher(left=left, right=right, left_id="id", right_id="id")
     with pytest.raises(ValueError, match="not found in left source"):
-        matcher.match(on=["name"], matching_algorithm=FuzzyMatcher(threshold=0.85))
+        matcher.match(match_on=["name"], matching_algorithm=FuzzyMatcher(threshold=0.85))
 
 
 def test_match_fuzzy_missing_field_right():
@@ -598,7 +617,7 @@ def test_match_fuzzy_missing_field_right():
     right = pl.DataFrame({"id": [2], "email": ["b@test.com"]})
     matcher = Matcher(left=left, right=right, left_id="id", right_id="id")
     with pytest.raises(ValueError, match="not found in right source"):
-        matcher.match(on=["name"], matching_algorithm=FuzzyMatcher(threshold=0.85))
+        matcher.match(match_on=["name"], matching_algorithm=FuzzyMatcher(threshold=0.85))
 
 
 def test_match_fuzzy_non_string_field_raises():
@@ -607,7 +626,7 @@ def test_match_fuzzy_non_string_field_raises():
     right = pl.DataFrame({"id": [2], "name": ["Bob"], "age": [25]})
     matcher = Matcher(left=left, right=right, left_id="id", right_id="id")
     with pytest.raises(ValueError, match="must be string.*Utf8"):
-        matcher.match(on=["age"], matching_algorithm=FuzzyMatcher(threshold=0.85))
+        matcher.match(match_on=["age"], matching_algorithm=FuzzyMatcher(threshold=0.85))
 
 
 def test_match_fuzzy_threshold_validation():
@@ -616,9 +635,9 @@ def test_match_fuzzy_threshold_validation():
     right = pl.DataFrame({"id": [2], "name": ["b"]})
     matcher = Matcher(left=left, right=right, left_id="id", right_id="id")
     with pytest.raises(ValueError, match="threshold must be between 0 and 1"):
-        matcher.match(on=["name"], matching_algorithm=FuzzyMatcher(threshold=1.5))
+        matcher.match(match_on=["name"], matching_algorithm=FuzzyMatcher(threshold=1.5))
     with pytest.raises(ValueError, match="threshold must be between 0 and 1"):
-        matcher.match(on=["name"], matching_algorithm=FuzzyMatcher(threshold=-0.1))
+        matcher.match(match_on=["name"], matching_algorithm=FuzzyMatcher(threshold=-0.1))
 
 
 def test_match_fuzzy_high_threshold_fewer_matches():
@@ -626,8 +645,8 @@ def test_match_fuzzy_high_threshold_fewer_matches():
     left = pl.DataFrame({"id": [1], "name": ["Alice"]})
     right = pl.DataFrame({"id": [2], "name": ["Alicia"]})
     matcher = Matcher(left=left, right=right, left_id="id", right_id="id")
-    low = matcher.match(on=["name"], matching_algorithm=FuzzyMatcher(threshold=0.5))
-    high = matcher.match(on=["name"], matching_algorithm=FuzzyMatcher(threshold=0.99))
+    low = matcher.match(match_on=["name"], matching_algorithm=FuzzyMatcher(threshold=0.5))
+    high = matcher.match(match_on=["name"], matching_algorithm=FuzzyMatcher(threshold=0.99))
     assert low.count >= high.count
 
 
@@ -636,7 +655,7 @@ def test_match_fuzzy_nulls_excluded():
     left = pl.DataFrame({"id": [1, 2], "name": ["Alice", None]})
     right = pl.DataFrame({"id": [3, 4], "name": ["Alicia", "Bob"]})
     matcher = Matcher(left=left, right=right, left_id="id", right_id="id")
-    results = matcher.match(on=["name"], matching_algorithm=FuzzyMatcher(threshold=0.5))
+    results = matcher.match(match_on=["name"], matching_algorithm=FuzzyMatcher(threshold=0.5))
     # Row with null on left should not produce matches; only (1,3) can match
     left_ids_in_results = results.matches["id"].to_list()
     assert 2 not in left_ids_in_results, "Left row with null name should be excluded from matching"
@@ -647,7 +666,7 @@ def test_match_fuzzy_empty_when_no_matches():
     left = pl.DataFrame({"id": [1], "name": ["xyzabc"]})
     right = pl.DataFrame({"id": [2], "name": ["qqq"]})
     matcher = Matcher(left=left, right=right, left_id="id", right_id="id")
-    results = matcher.match(on=["name"], matching_algorithm=FuzzyMatcher(threshold=0.99))
+    results = matcher.match(match_on=["name"], matching_algorithm=FuzzyMatcher(threshold=0.99))
     assert results.count == 0
     assert "confidence" in results.matches.columns
 
@@ -659,7 +678,7 @@ def test_deduplicator_match_fuzzy():
         "name": ["Alice Smith", "Alicia Smith", "Bob Jones"],  # 1 and 2 are fuzzy dupes
     })
     deduplicator = Deduplicator(source=df, id_col="id")
-    results = deduplicator.match(on=["name"], matching_algorithm=FuzzyMatcher(threshold=0.80))
+    results = deduplicator.match(match_on=["name"], matching_algorithm=FuzzyMatcher(threshold=0.80))
     assert results.count >= 1
     assert "confidence" in results.matches.columns
     # No self-matches (id must not equal id_right)
@@ -673,7 +692,7 @@ def test_deduplicator_match_fuzzy():
 
 
 def test_match_with_blocking_key_same_results():
-    """With blocking_key, same matches found when blocks align with match keys."""
+    """With block_on, same matches found when blocks align with match keys."""
     left = pl.DataFrame({
         "id": [1, 2],
         "email": ["a@test.com", "b@test.com"],
@@ -685,8 +704,8 @@ def test_match_with_blocking_key_same_results():
         "zip_code": ["10001", "10002"],
     })
     matcher = Matcher(left=left, right=right, left_id="id", right_id="id")
-    without = matcher.match(on="email")
-    with_blocking = matcher.match(on="email", blocking_key="zip_code")
+    without = matcher.match(match_on="email")
+    with_blocking = matcher.match(match_on="email", block_on="zip_code")
     assert without.count == with_blocking.count == 1
     assert without.matches["id"].to_list() == with_blocking.matches["id"].to_list()
     assert without.matches["id_right"].to_list() == with_blocking.matches["id_right"].to_list()
@@ -705,12 +724,12 @@ def test_match_with_blocking_key_no_common_blocks():
         "zip_code": ["20001", "20002"],
     })
     matcher = Matcher(left=left, right=right, left_id="id", right_id="id")
-    results = matcher.match(on="email", blocking_key="zip_code")
+    results = matcher.match(match_on="email", block_on="zip_code")
     assert results.count == 0
 
 
 def test_match_blocking_key_multiple_keys():
-    """blocking_key as list restricts to same (zip_code, state) block."""
+    """block_on as list restricts to same (zip_code, state) block."""
     left = pl.DataFrame({
         "id": [1, 2, 3],
         "email": ["a@test.com", "b@test.com", "c@test.com"],
@@ -726,7 +745,7 @@ def test_match_blocking_key_multiple_keys():
     matcher = Matcher(left=left, right=right, left_id="id", right_id="id")
     # Block on (zip_code, state): (10001, NY) and (10001, CA) and (10002, NY)
     # Same-email pairs: (1,4) in (10001,NY), (2,5) in (10001,NY) but 2 is CA/5 is NY so no; (3,6) in (10002,NY)
-    results = matcher.match(on="email", blocking_key=["zip_code", "state"])
+    results = matcher.match(match_on="email", block_on=["zip_code", "state"])
     assert results.count == 2  # (1,4) and (3,6); (2,5) different state within 10001
     ids_left = sorted(results.matches["id"].to_list())
     ids_right = sorted(results.matches["id_right"].to_list())
@@ -735,34 +754,34 @@ def test_match_blocking_key_multiple_keys():
 
 
 def test_match_blocking_key_empty_list_raises():
-    """blocking_key=[] raises; must be non-empty when provided."""
+    """block_on=[] raises; must be non-empty when provided."""
     left = pl.DataFrame({"id": [1], "email": ["a@test.com"], "zip_code": ["1"]})
     right = pl.DataFrame({"id": [2], "email": ["a@test.com"], "zip_code": ["1"]})
     matcher = Matcher(left=left, right=right, left_id="id", right_id="id")
-    with pytest.raises(ValueError, match="blocking_key must be non-empty"):
-        matcher.match(on="email", blocking_key=[])
+    with pytest.raises(ValueError, match="block_on must be.*non-empty"):
+        matcher.match(match_on="email", block_on=[])
 
 
 def test_match_blocking_key_list_missing_column_raises():
-    """When blocking_key is a list, missing column in right is reported."""
+    """When block_on is a list, missing column in right is reported."""
     left = pl.DataFrame({"id": [1], "email": ["a@test.com"], "zip_code": ["1"], "state": ["NY"]})
     right = pl.DataFrame({"id": [2], "email": ["a@test.com"], "zip_code": ["1"]})  # no state
     matcher = Matcher(left=left, right=right, left_id="id", right_id="id")
     with pytest.raises(ValueError, match="not found in right source"):
-        matcher.match(on="email", blocking_key=["zip_code", "state"])
+        matcher.match(match_on="email", block_on=["zip_code", "state"])
 
 
 def test_match_blocking_key_missing_raises():
-    """blocking_key column must exist in both left and right."""
+    """block_on column must exist in both left and right."""
     left = pl.DataFrame({"id": [1], "email": ["a@test.com"], "zip_code": ["1"]})
     right = pl.DataFrame({"id": [2], "email": ["a@test.com"]})  # no zip_code
     matcher = Matcher(left=left, right=right, left_id="id", right_id="id")
     with pytest.raises(ValueError, match="not found in right source"):
-        matcher.match(on="email", blocking_key="zip_code")
+        matcher.match(match_on="email", block_on="zip_code")
 
 
 def test_match_blocking_key_nulls_form_one_block():
-    """Nulls in blocking_key form one block; matches found within that block."""
+    """Nulls in block_on form one block; matches found within that block."""
     left = pl.DataFrame({
         "id": [1, 2],
         "email": ["a@test.com", "b@test.com"],
@@ -774,7 +793,7 @@ def test_match_blocking_key_nulls_form_one_block():
         "zip_code": [None, "10002"],
     })
     matcher = Matcher(left=left, right=right, left_id="id", right_id="id")
-    results = matcher.match(on="email", blocking_key="zip_code")
+    results = matcher.match(match_on="email", block_on="zip_code")
     # Null block: (1,3) match on email. 10002 block: (2,4) no email match.
     assert results.count == 1
     assert results.matches["id"].to_list() == [1]
@@ -801,15 +820,15 @@ def test_match_blocking_key_per_rule():
     })
     matcher = Matcher(left=left, right=right, left_id="id", right_id="id")
     # Cascade: email within zip (no match in same zip), then name within state → (1,3) match
-    per_rule = matcher.match(on="email", blocking_key="zip_code").refine(
-        on=["name"], blocking_key="state"
+    per_rule = matcher.match(match_on="email", block_on="zip_code").refine(
+        match_on=["name"], block_on="state"
     )
     assert per_rule.count == 1
     assert per_rule.matches["id"].to_list() == [1]
     assert per_rule.matches["id_right"].to_list() == [3]
     # Single blocking by zip for both: no pair in same zip has matching email or name
-    by_zip = matcher.match(on="email", blocking_key="zip_code").refine(
-        on=["name"], blocking_key="zip_code"
+    by_zip = matcher.match(match_on="email", block_on="zip_code").refine(
+        match_on=["name"], block_on="zip_code"
     )
     assert by_zip.count == 0
 
@@ -820,7 +839,7 @@ def test_match_multiple_rules_raises_use_refine():
     right = pl.DataFrame({"id": [2], "email": ["a@x.com"], "name": ["A"], "zip_code": ["1"]})
     matcher = Matcher(left=left, right=right, left_id="id", right_id="id")
     with pytest.raises(ValueError, match="Only a single rule"):
-        matcher.match(on=[["email"], ["name"]])  # multiple rules not allowed
+        matcher.match(match_on=[["email"], ["name"]])  # multiple rules not allowed
 
 
 def test_match_blocking_key_same_key_for_two_rules():
@@ -838,8 +857,8 @@ def test_match_blocking_key_same_key_for_two_rules():
         "zip_code": ["10001", "10002"],
     })
     matcher = Matcher(left=left, right=right, left_id="id", right_id="id")
-    results = matcher.match(on="email", blocking_key="zip_code").refine(
-        on=["name"], blocking_key="zip_code"
+    results = matcher.match(match_on="email", block_on="zip_code").refine(
+        match_on=["name"], block_on="zip_code"
     )
     assert results.count >= 1
 
@@ -859,7 +878,7 @@ def test_match_blocking_key_per_rule_none_for_one_rule():
         "zip_code": ["10002", "10001"],
     })
     matcher = Matcher(left=left, right=right, left_id="id", right_id="id")
-    results = matcher.match(on="email", blocking_key="zip_code").refine(on=["name"])
+    results = matcher.match(match_on="email", block_on="zip_code").refine(match_on=["name"])
     assert results.count == 2
     ids = sorted(results.matches["id"].to_list())
     assert ids == [1, 2]
@@ -868,7 +887,7 @@ def test_match_blocking_key_per_rule_none_for_one_rule():
 
 
 def test_match_fuzzy_with_blocking_key():
-    """match(on=[...], FuzzyMatcher, blocking_key=...) finds matches only within blocks."""
+    """match(match_on=[...], FuzzyMatcher, block_on=...) finds matches only within blocks."""
     left = pl.DataFrame({
         "id": [1, 2],
         "name": ["Alice Smith", "Bob Jones"],
@@ -881,9 +900,9 @@ def test_match_fuzzy_with_blocking_key():
     })
     matcher = Matcher(left=left, right=right, left_id="id", right_id="id")
     results = matcher.match(
-        on=["name"],
+        match_on=["name"],
         matching_algorithm=FuzzyMatcher(threshold=0.80),
-        blocking_key="zip_code",
+        block_on="zip_code",
     )
     # (1,3) same block 10001; (2,4) and (2,5) same block 10002. No cross-block pairs.
     assert results.count >= 1
@@ -898,9 +917,9 @@ def test_match_fuzzy_blocking_same_as_no_blocking_when_one_block():
     left = pl.DataFrame({"id": [1], "name": ["Alice"], "z": ["same"]})
     right = pl.DataFrame({"id": [2], "name": ["Alicia"], "z": ["same"]})
     matcher = Matcher(left=left, right=right, left_id="id", right_id="id")
-    no_block = matcher.match(on=["name"], matching_algorithm=FuzzyMatcher(threshold=0.5))
+    no_block = matcher.match(match_on=["name"], matching_algorithm=FuzzyMatcher(threshold=0.5))
     with_block = matcher.match(
-        on=["name"], matching_algorithm=FuzzyMatcher(threshold=0.5), blocking_key="z"
+        match_on=["name"], matching_algorithm=FuzzyMatcher(threshold=0.5), block_on="z"
     )
     assert no_block.count == with_block.count
 
@@ -920,9 +939,9 @@ def test_match_fuzzy_blocking_score_and_on_populated_for_all_blocks():
     })
     matcher = Matcher(left=left, right=right, left_id="id", right_id="id")
     results = matcher.match(
-        on=["name"],
+        match_on=["name"],
         matching_algorithm=FuzzyMatcher(threshold=0.5),
-        blocking_key="z",
+        block_on="z",
     )
     assert results.count == 2
     assert results.matches.filter(pl.col("fuzzy_score").is_null()).height == 0
@@ -930,7 +949,7 @@ def test_match_fuzzy_blocking_score_and_on_populated_for_all_blocks():
 
 
 def test_deduplicator_match_with_blocking_key_list():
-    """Deduplicator.match with blocking_key as list works and filters self-matches."""
+    """Deduplicator.match with block_on as list works and filters self-matches."""
     df = pl.DataFrame({
         "id": [1, 2, 3, 4, 5],
         "email": ["a@test.com", "a@test.com", "b@test.com", "b@test.com", "c@test.com"],
@@ -939,21 +958,21 @@ def test_deduplicator_match_with_blocking_key_list():
     })
     deduplicator = Deduplicator(source=df, id_col="id")
     # Block by (zip_code, state): (10001, NY) has 1,2 same email; (10002, NY) has 3,4 same email. Pairs (1,2),(2,1),(3,4),(4,3).
-    results = deduplicator.match(on="email", blocking_key=["zip_code", "state"])
+    results = deduplicator.match(match_on="email", block_on=["zip_code", "state"])
     assert results.count == 4  # (1,2), (2,1), (3,4), (4,3); no self-matches
     for row in results.matches.iter_rows(named=True):
         assert row["id"] != row["id_right"]
 
 
 def test_deduplicator_match_with_blocking_key():
-    """Deduplicator.match with blocking_key delegates and filters self-matches."""
+    """Deduplicator.match with block_on delegates and filters self-matches."""
     df = pl.DataFrame({
         "id": [1, 2, 3, 4],
         "email": ["a@test.com", "a@test.com", "b@test.com", "c@test.com"],
         "zip_code": ["10001", "10001", "10002", "10002"],
     })
     deduplicator = Deduplicator(source=df, id_col="id")
-    results = deduplicator.match(on="email", blocking_key="zip_code")
+    results = deduplicator.match(match_on="email", block_on="zip_code")
     # Duplicates: (1,2) and (2,1) in block 10001; only one pair after self-filter
     assert results.count >= 1
     id_right = "id_right"
@@ -962,7 +981,7 @@ def test_deduplicator_match_with_blocking_key():
 
 
 def test_deduplicator_match_fuzzy_with_blocking_key():
-    """Deduplicator.match with FuzzyMatcher and blocking_key works and filters self-matches."""
+    """Deduplicator.match with FuzzyMatcher and block_on works and filters self-matches."""
     df = pl.DataFrame({
         "id": [1, 2, 3],
         "name": ["Alice Smith", "Alicia Smith", "Bob Jones"],
@@ -970,9 +989,9 @@ def test_deduplicator_match_fuzzy_with_blocking_key():
     })
     deduplicator = Deduplicator(source=df, id_col="id")
     results = deduplicator.match(
-        on=["name"],
+        match_on=["name"],
         matching_algorithm=FuzzyMatcher(threshold=0.80),
-        blocking_key="zip_code",
+        block_on="zip_code",
     )
     assert results.count >= 1
     assert "confidence" in results.matches.columns
@@ -996,8 +1015,8 @@ def test_union_two_exact_results():
         "name": ["A. Smith", "B. Jones", "D. Lee"],
     })
     matcher = Matcher(left=left, right=right, left_id="id", right_id="id")
-    by_email = matcher.match(on="email")
-    by_name = matcher.match(on="name")  # no matches on name with this data
+    by_email = matcher.match(match_on="email")
+    by_name = matcher.match(match_on="name")  # no matches on name with this data
     combined = by_email.union(by_name)
     assert combined.count == by_email.count
     assert "exact_score" in combined.matches.columns
@@ -1021,8 +1040,8 @@ def test_union_two_exact_runs_same_pair_preserves_both():
         "name": ["Alice", "Bob"],
     })
     matcher = Matcher(left=left, right=right, left_id="id", right_id="id")
-    by_email = matcher.match(on="email")
-    by_name = matcher.match(on="name")
+    by_email = matcher.match(match_on="email")
+    by_name = matcher.match(match_on="name")
     combined = by_email.union(by_name)
     assert combined.count == 2
     assert "exact_on" in combined.matches.columns
@@ -1038,8 +1057,8 @@ def test_union_exact_and_fuzzy():
     left = pl.DataFrame({"id": [1, 2], "email": ["a@x.com", "b@x.com"], "name": ["Alice", "Bob"]})
     right = pl.DataFrame({"id": [10, 20], "email": ["a@x.com", "c@x.com"], "name": ["Alice", "Charlie"]})
     matcher = Matcher(left=left, right=right, left_id="id", right_id="id")
-    exact_r = matcher.match(on="email")
-    fuzzy_r = matcher.match(on="name", matching_algorithm=FuzzyMatcher(threshold=0.8))
+    exact_r = matcher.match(match_on="email")
+    fuzzy_r = matcher.match(match_on="name", matching_algorithm=FuzzyMatcher(threshold=0.8))
     combined = exact_r.union(fuzzy_r)
     # At least the exact match (1,10) and possibly fuzzy matches
     assert combined.count >= 1
@@ -1050,11 +1069,11 @@ def test_union_exact_and_fuzzy():
 
 
 def test_match_empty_when_blocking_has_no_common_keys():
-    """No blocks (blocking_key has no common values) returns empty MatchResults with provenance columns."""
+    """No blocks (block_on has no common values) returns empty MatchResults with provenance columns."""
     left = pl.DataFrame({"id": [1, 2], "email": ["a@x.com", "b@x.com"], "zip": [1, 2]})
     right = pl.DataFrame({"id": [10, 20], "email": ["a@x.com", "c@x.com"], "zip": [9, 9]})
     matcher = Matcher(left=left, right=right, left_id="id", right_id="id")
-    result = matcher.match(on="email", blocking_key="zip")  # zip 1,2 vs 9,9 -> no common blocks
+    result = matcher.match(match_on="email", block_on="zip")  # zip 1,2 vs 9,9 -> no common blocks
     assert result.count == 0
     assert "exact_score" in result.matches.columns
     assert "exact_on" in result.matches.columns
@@ -1065,8 +1084,8 @@ def test_union_empty_with_non_empty():
     left_b = pl.DataFrame({"id": [1, 2], "email": ["a@x.com", "b@x.com"], "zip": [1, 2]})
     right_b = pl.DataFrame({"id": [10, 20], "email": ["a@x.com", "c@x.com"], "zip": [9, 9]})
     matcher_b = Matcher(left=left_b, right=right_b, left_id="id", right_id="id")
-    full = matcher_b.match(on="email")
-    empty = matcher_b.match(on="email", blocking_key="zip")  # zip 1,2 vs 9,9 -> no common blocks
+    full = matcher_b.match(match_on="email")
+    empty = matcher_b.match(match_on="email", block_on="zip")  # zip 1,2 vs 9,9 -> no common blocks
     combined = full.union(empty)
     assert combined.count == full.count
     combined2 = empty.union(full)
@@ -1078,8 +1097,8 @@ def test_union_all_empty():
     left = pl.DataFrame({"id": [1, 2], "email": ["a@x.com", "b@x.com"], "zip": [1, 2]})
     right = pl.DataFrame({"id": [10, 20], "email": ["x@x.com", "y@x.com"], "zip": [9, 9]})
     matcher = Matcher(left=left, right=right, left_id="id", right_id="id")
-    empty1 = matcher.match(on="email", blocking_key="zip")
-    empty2 = matcher.match(on="email", blocking_key="zip")
+    empty1 = matcher.match(match_on="email", block_on="zip")
+    empty2 = matcher.match(match_on="email", block_on="zip")
     combined = empty1.union(empty2)
     assert combined.count == 0
     assert "exact_score" in combined.matches.columns or combined.matches.width >= 2
@@ -1091,7 +1110,7 @@ def test_union_requires_same_source():
     right = pl.DataFrame({"id": [10], "email": ["a@x.com"]})
     m1 = Matcher(left=left, right=right, left_id="id", right_id="id")
     m2 = Matcher(left=left, right=right, left_id="id", right_id="id")
-    r1 = m1.match(on="email")
-    r2 = m2.match(on="email")
+    r1 = m1.match(match_on="email")
+    r2 = m2.match(match_on="email")
     with pytest.raises(ValueError, match="same source"):
         r1.union(r2)

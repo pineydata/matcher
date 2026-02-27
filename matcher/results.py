@@ -18,14 +18,14 @@ Usage Pattern:
     >>> matcher = Matcher(left=left_df, right=right_df, left_id="id", right_id="id")
     >>>
     >>> # Basic matching
-    >>> results = matcher.match(on="email")
+    >>> results = matcher.match(match_on="email")
     >>> print(f"Found {results.count} matches")
     >>>
     >>> # Chain operations (pipe pattern)
     >>> filtered = results.pipe(lambda df: df.filter(pl.col("confidence") > 0.9))
     >>>
     >>> # Cascading (refine)
-    >>> refined = results.refine(on=["first_name", "last_name"])
+    >>> refined = results.refine(match_on=["first_name", "last_name"])
     >>>
     >>> # Evaluate against ground truth
     >>> metrics = results.evaluate(ground_truth)
@@ -56,12 +56,17 @@ import polars as pl
 from polars import DataFrame
 from typing import Union, Optional, Callable, TYPE_CHECKING
 
+from matcher.batched import BatchedMatcher
+from matcher.evaluators import SimpleEvaluator
+from matcher.rules_and_blocking import (
+    normalize_fields,
+    paired_blocks_by_key,
+)
+
 if TYPE_CHECKING:
     from matcher.matcher import Matcher
     from matcher.deduplicator import Deduplicator
     from matcher.evaluators import Evaluator
-
-from matcher.evaluators import SimpleEvaluator
 
 
 class MatchResults:
@@ -71,14 +76,14 @@ class MatchResults:
         self,
         matches: DataFrame,
         original_left: Optional[DataFrame] = None,
-        source: Optional[Union["Matcher", "Deduplicator"]] = None,
+        source: Optional[Union["Matcher", "Deduplicator", BatchedMatcher]] = None,
     ):
         """Initialize with matches DataFrame.
 
         Args:
             matches: Polars DataFrame with match results
             original_left: Original left DataFrame (stored for refine operations)
-            source: Matcher or Deduplicator that produced these results (enables refine(on=...) without passing matcher)
+            source: Matcher, Deduplicator, or BatchedMatcher that produced these results (enables refine(match_on=...) without passing matcher)
         """
         self.matches = matches
         self._original_left = original_left
@@ -102,7 +107,7 @@ class MatchResults:
             New MatchResults with transformed matches
 
         Example:
-            >>> results = matcher.match(on="email")
+            >>> results = matcher.match(match_on="email")
             >>> filtered = results.pipe(lambda df: df.filter(pl.col("confidence") > 0.9))
         """
         return MatchResults(func(self.matches), self._original_left, self._source)
@@ -131,7 +136,7 @@ class MatchResults:
             ValueError: If neither n nor fraction is set, or both are set.
 
         Example:
-            >>> results = matcher.match(on=["name"], matching_algorithm=FuzzyMatcher(threshold=0.85))
+            >>> results = matcher.match(match_on=["name"], matching_algorithm=FuzzyMatcher(threshold=0.85))
             >>> results.sample(n=50, seed=42).export_for_review("sample_for_review.csv")
         """
         if n is not None and fraction is not None:
@@ -152,43 +157,45 @@ class MatchResults:
 
     def refine(
         self,
-        on: Union[str, list[str]],
-        matcher: Optional[Union["Matcher", "Deduplicator"]] = None,
-        blocking_key: Optional[Union[str, list[str]]] = None,
+        match_on: Union[str, list[str]],
+        matcher: Optional[Union["Matcher", "Deduplicator", BatchedMatcher]] = None,
+        block_on: Optional[Union[str, list[str]]] = None,
     ) -> "MatchResults":
         """Refine matches by matching on another rule for unmatched left records.
 
-        Cascade: first match(on=...), then refine(on=...) for unmatched rows.
+        Cascade: first match(match_on=...), then refine(match_on=...) for unmatched rows.
 
         When results come from matcher.match() or deduplicator.match(), the matcher
-        is stored and you can call refine(on=[...]) without passing matcher.
+        is stored and you can call refine(match_on=[...]) without passing matcher.
 
         Args:
-            on: What to match on for unmatched records (str or list[str]).
+            match_on: What to match on for unmatched records (str or list[str]).
             matcher: Optional. Only needed if results were not from match().
-            blocking_key: Optional column name or list of names. Restricts this step to same block(s).
+            block_on: Optional column name or list of names. Restricts this step to same block(s).
 
         Returns:
             New MatchResults with combined matches (original + refined).
 
         Example:
-            >>> results = matcher.match(on="email")
-            >>> refined = results.refine(on=["first_name", "last_name"])
-            >>> refined = results.refine(on=["first_name", "last_name"], blocking_key="zip_code")
+            >>> results = matcher.match(match_on="email")
+            >>> refined = results.refine(match_on=["first_name", "last_name"])
+            >>> refined = results.refine(match_on=["first_name", "last_name"], block_on="zip_code")
         """
         from matcher.deduplicator import Deduplicator
-
-        rule_list = [on] if isinstance(on, str) else list(on)
-        if not rule_list:
-            raise ValueError("refine(on=...) must be a non-empty string or list of field names")
 
         source = self._source if matcher is None else matcher
         if source is None:
             raise ValueError(
                 "refine() requires a matcher. Results from matcher.match() or "
                 "deduplicator.match() have it stored; otherwise pass matcher: "
-                "refine(on=[...], matcher=matcher)."
+                "refine(match_on=[...], matcher=matcher)."
             )
+
+        # BatchedMatcher: delegate to its refine (re-stream + filter by matched_left_ids)
+        if isinstance(source, BatchedMatcher):
+            return source.refine(self, match_on=match_on, block_on=block_on)
+
+        rule_list = normalize_fields(match_on, single_rule_only=True, param="match_on")
 
         # Get the actual Matcher instance (Deduplicator wraps one)
         if isinstance(source, Deduplicator):
@@ -242,23 +249,21 @@ class MatchResults:
         # Get right source (for deduplication, it's a copy of left; for entity resolution, it's the original right)
         right_source = actual_matcher.right
 
-        if blocking_key is not None:
-            keys = actual_matcher._normalize_blocking_keys(blocking_key)
-            assert keys is not None  # only None when blocking_key is None
+        if block_on is not None:
+            keys = normalize_fields(block_on, allow_none=True, param="block_on")
+            assert keys is not None  # only None when block_on is None
             for k in keys:
                 if k not in unmatched_left.columns:
                     raise ValueError(
-                        f"blocking_key '{k}' not found in (unmatched) left. "
+                        f"block_on '{k}' not found in (unmatched) left. "
                         f"Available: {unmatched_left.columns}"
                     )
                 if k not in right_source.columns:
                     raise ValueError(
-                        f"blocking_key '{k}' not found in right source. "
+                        f"block_on '{k}' not found in right source. "
                         f"Available: {right_source.columns}"
                     )
-            blocks = actual_matcher._paired_blocks_by_key(
-                unmatched_left, right_source, keys
-            )
+            blocks = paired_blocks_by_key(unmatched_left, right_source, keys)
             block_matches = []
             for left_block, right_block in blocks:
                 block_result = actual_matcher.matching_algorithm.match(
@@ -281,7 +286,7 @@ class MatchResults:
         from matcher.matcher import _add_provenance_columns
         from matcher.algorithms import is_score_on_column
         algo = actual_matcher.matching_algorithm
-        new_matches = _add_provenance_columns(new_matches, on, algo)
+        new_matches = _add_provenance_columns(new_matches, match_on, algo)
 
         # Combine by (left_id, right_id_right) then rejoin to get consistent schema
         # (algorithm may return different columns for different rules, e.g. multi-field join)
@@ -510,7 +515,7 @@ class MatchResults:
             ...     "left_id": ["left_1", "left_2"],
             ...     "right_id": ["right_1", "right_2"]
             ... })
-            >>> results = matcher.match(on="email")
+            >>> results = matcher.match(match_on="email")
             >>> metrics = results.evaluate(ground_truth)
             >>> print(f"Precision: {metrics['precision']:.2%}")
             >>> print(f"Recall: {metrics['recall']:.2%}")
@@ -539,7 +544,7 @@ class MatchResults:
             path: Output path for the CSV file (str or pathlib.Path; use .csv).
 
         Example:
-            >>> results = matcher.match(on=["name"], matching_algorithm=FuzzyMatcher(threshold=0.85))
+            >>> results = matcher.match(match_on=["name"], matching_algorithm=FuzzyMatcher(threshold=0.85))
             >>> results.export_for_review("matches_for_review.csv")
             >>> # Export a sample for reviewers
             >>> results.sample(n=50, seed=42).export_for_review("sample_for_review.csv")

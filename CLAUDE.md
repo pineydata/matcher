@@ -238,11 +238,11 @@ deduplicator = Deduplicator(
 ### Matching & Evaluation
 ```python
 # Exact matching (works for both Matcher and Deduplicator)
-results = matcher.match(on="email")
+results = matcher.match(match_on="email")
 # With blocking for performance (optional)
-results = matcher.match(on="email", blocking_key="zip_code")
+results = matcher.match(match_on="email", block_on="zip_code")
 # Or multiple rules
-results = matcher.match(on="email").refine(on=["first_name", "last_name"])
+results = matcher.match(match_on="email").refine(match_on=["first_name", "last_name"])
 
 # Evaluate against ground truth
 metrics = results.evaluate(ground_truth)

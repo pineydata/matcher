@@ -55,7 +55,7 @@ class TestMatchingAlgorithm:
         # Add id column and it should work
         df_with_id = df.with_row_index("id")
         deduplicator = Deduplicator(source=df_with_id, id_col="id")
-        results = deduplicator.match(on=["email"])
+        results = deduplicator.match(match_on=["email"])
 
         # Should find duplicate pair (a@test.com appears twice)
         # Deduplicator filters self-matches, so we get 2 match rows (both directions)
@@ -96,7 +96,7 @@ class TestMatchingAlgorithm:
 
         # Use Deduplicator instead of ExactMatcher directly (Deduplicator filters self-matches)
         deduplicator = Deduplicator(source=df, id_col="id")
-        results = deduplicator.match(on=["email", "zip_code"])
+        results = deduplicator.match(match_on=["email", "zip_code"])
 
         # Should find duplicate pair (id 1 and 2 match on both email and zip_code)
         # Deduplicator filters self-matches, so we get 2 match rows
@@ -153,7 +153,7 @@ class TestComponentComposition:
         )
 
         assert isinstance(matcher.matching_algorithm, TestMatcher)
-        results = matcher.match(on="email")
+        results = matcher.match(match_on="email")
         assert results.count == 0  # Custom algorithm returns empty
 
     def test_custom_matching_algorithm_with_data(self):
@@ -176,7 +176,7 @@ class TestComponentComposition:
 
         assert isinstance(matcher.matching_algorithm, TestMatcher)
 
-        results = matcher.match(on="email")
+        results = matcher.match(match_on="email")
         assert results.count == 1
 
 
@@ -200,7 +200,7 @@ class TestComponentEdgeCases:
 
         # Should raise error before algorithm is called
         with pytest.raises(ValueError, match="Field\\(s\\) .* not found in left source"):
-            matcher.match(on="missing")
+            matcher.match(match_on="missing")
 
     def test_deduplication_with_custom_algorithm(self):
         """Test deduplication with custom algorithm."""
@@ -225,7 +225,7 @@ class TestComponentEdgeCases:
             matching_algorithm=DedupMatcher()
         )
 
-        results = deduplicator.match(on="email")
+        results = deduplicator.match(match_on="email")
         # Custom algorithm returns matches for all rows on email
         # After Deduplicator filters self-matches (id == id_right), we get:
         # - 1->2 and 2->1 (duplicate email matches)

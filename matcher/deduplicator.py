@@ -18,17 +18,17 @@ Usage Pattern:
     >>>
     >>> df = pl.read_parquet("customers.parquet")
     >>> deduplicator = Deduplicator(source=df, id_col="id")
-    >>> results = deduplicator.match(on="email")
+    >>> results = deduplicator.match(match_on="email")
     >>> print(f"Found {results.count} duplicate pairs")
     >>> # Fuzzy: pass FuzzyMatcher for this call
     >>> from matcher import FuzzyMatcher
-    >>> fuzzy_results = deduplicator.match(on=["name"], matching_algorithm=FuzzyMatcher(threshold=0.85))
+    >>> fuzzy_results = deduplicator.match(match_on=["name"], matching_algorithm=FuzzyMatcher(threshold=0.85))
 
 Differences from Matcher:
 - Takes a single source DataFrame instead of left/right
 - Uses id_col for both left_id and right_id
 - Automatically filters self-matches (where id == id_right)
-- Same match() API: on, blocking_key, matching_algorithm (single entry point)
+- Same match() API: match_on, block_on, matching_algorithm (single entry point)
 
 Dependencies:
 - Uses Matcher (from matcher.matcher) internally for matching logic
@@ -40,6 +40,7 @@ from polars import DataFrame
 from typing import Union, Optional
 from matcher.algorithms import MatchingAlgorithm
 from matcher.matcher import Matcher
+from matcher.oom import warn_deduplicator_source_size
 from matcher.results import MatchResults
 import polars as pl
 
@@ -69,6 +70,8 @@ class Deduplicator:
         Raises:
             ValueError: If source DataFrame doesn't have the specified ID column
         """
+        warn_deduplicator_source_size(source)
+
         # Create Matcher internally with source cloned
         self._matcher = Matcher(
             left=source,
@@ -81,18 +84,18 @@ class Deduplicator:
 
     def match(
         self,
-        on: Union[str, list[str]],
-        blocking_key: Optional[Union[str, list[str]]] = None,
+        match_on: Union[str, list[str]],
+        block_on: Optional[Union[str, list[str]]] = None,
         matching_algorithm: Optional[MatchingAlgorithm] = None,
     ) -> MatchResults:
         """Perform deduplication for a single rule. Self-matches are filtered out.
 
-        Same API as Matcher.match(): single rule (on=), optional blocking_key (str or list[str]), optional
-        matching_algorithm. For cascading, chain with .refine(on=...) on the result.
+        Same API as Matcher.match(): single rule (match_on=), optional block_on (str or list[str]), optional
+        matching_algorithm. For cascading, chain with .refine(match_on=...) on the result.
 
         Args:
-            on: Single rule (str or list[str]).
-            blocking_key: Optional column name or list of names.
+            match_on: Single rule (str or list[str]).
+            block_on: Optional column name or list of names.
             matching_algorithm: Optional (e.g. FuzzyMatcher(threshold=0.85)).
 
         Returns:
@@ -100,8 +103,8 @@ class Deduplicator:
         """
         id_col_right = f"{self._id_col}_right"
         results = self._matcher.match(
-            on=on,
-            blocking_key=blocking_key,
+            match_on=match_on,
+            block_on=block_on,
             matching_algorithm=matching_algorithm,
         )
         filtered_matches = results.matches.filter(

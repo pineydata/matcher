@@ -19,7 +19,7 @@ Usage Pattern:
     >>> import polars as pl
     >>>
     >>> matcher = Matcher(left=left_df, right=right_df, left_id="id", right_id="id")
-    >>> results = matcher.match(on="email")
+    >>> results = matcher.match(match_on="email")
     >>>
     >>> ground_truth = pl.DataFrame({
     ...     "left_id": ["left_1", "left_2"],
@@ -205,7 +205,7 @@ def find_best_threshold(
 
     Example:
         >>> # Run fuzzy with a low threshold so you have scored pairs to sweep
-        >>> results = matcher.match(on=["name"], matching_algorithm=FuzzyMatcher(threshold=0.5))
+        >>> results = matcher.match(match_on=["name"], matching_algorithm=FuzzyMatcher(threshold=0.5))
         >>> best = find_best_threshold(results.matches, ground_truth, right_id_col="id_right")
         >>> print(f"Best threshold: {best['best_threshold']}, F1: {best['best_f1']:.2%}")
     """
