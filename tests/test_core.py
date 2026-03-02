@@ -2,7 +2,7 @@
 
 import polars as pl
 import pytest
-from matcher import Matcher, Deduplicator, MatchResults, FuzzyMatcher
+from matcher import BatchedMatcher, Matcher, Deduplicator, MatchResults, FuzzyMatcher
 from matcher.algorithms import MatchingAlgorithm
 
 
@@ -1114,6 +1114,29 @@ def test_union_requires_same_source():
     r2 = m2.match(match_on="email")
     with pytest.raises(ValueError, match="same source"):
         r1.union(r2)
+
+
+def test_union_batched_matcher():
+    """union() works with BatchedMatcher (build from matches path)."""
+    left = pl.DataFrame({"id": [1, 2], "email": ["a@x.com", "b@x.com"]})
+    right = pl.DataFrame({"id": [10, 20], "email": ["a@x.com", "b@x.com"]})
+    b = BatchedMatcher(iter([left]), iter([right]), left_id="id", right_id="id")
+    r1 = b.match(match_on="email")
+    combined = r1.union()
+    assert combined.count == 2
+    assert "id" in combined.matches.columns and "id_right" in combined.matches.columns
+
+
+def test_union_one_row_per_pair_when_source_has_duplicate_ids():
+    """union() yields exactly one row per (left_id, right_id_right) when source has duplicate IDs."""
+    # Left has duplicate id=1; rejoin would produce multiple rows per pair without dedupe
+    left = pl.DataFrame({"id": [1, 1, 2], "email": ["a@x.com", "a@x.com", "b@x.com"]})
+    right = pl.DataFrame({"id": [10, 20], "email": ["a@x.com", "b@x.com"]})
+    matcher = Matcher(left=left, right=right, left_id="id", right_id="id")
+    results = matcher.match(match_on="email")
+    combined = results.union(results)  # self-union; same pairs
+    assert combined.count == 2  # (1,10) and (2,20)
+    assert combined.matches.unique(subset=["id", "id_right"]).height == combined.count
 
 
 def test_to_pairs_deduplicator():

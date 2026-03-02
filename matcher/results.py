@@ -43,7 +43,7 @@ Key Methods:
 
 
 Dependencies:
-- Works with both Matcher and Deduplicator instances
+- Works with Matcher, Deduplicator, and BatchedMatcher (union supports all three)
 - Uses Evaluator components (from matcher.evaluators) for evaluation
 - Stores original_left DataFrame for refine operations
 
@@ -384,8 +384,8 @@ class MatchResults:
     def union(self, *others: "MatchResults") -> "MatchResults":
         """Combine this MatchResults with one or more others; pair set is the union, deduplicated.
 
-        All inputs must share the same original_left and same right (same matcher/source)
-        and same ID column names. Score/on columns are preserved per run: when the same
+        All inputs must share the same source (matcher, deduplicator, or BatchedMatcher).
+        Score/on columns are preserved per run: when the same
         algorithm type (e.g. exact) appears in multiple inputs, the first run gets
         exact_score/exact_on, the second gets exact_score_2/exact_on_2, and so on.
         No coalescing: you see every run's values and can apply your own rule.
@@ -398,7 +398,7 @@ class MatchResults:
         """
         from collections import defaultdict
 
-        from matcher.algorithms import kind_of_score_on_column
+        from matcher.algorithms import is_score_on_column, kind_of_score_on_column
         from matcher.deduplicator import Deduplicator
 
         all_results = [self] + list(others)
@@ -409,12 +409,13 @@ class MatchResults:
         source = self._source
         if source is None:
             raise ValueError(
-                "union() requires a matcher/source on all MatchResults (from matcher.match() or deduplicator.match())."
+                "union() requires a matcher/source on all MatchResults (from matcher.match(), "
+                "deduplicator.match(), or batched matcher)."
             )
         for i, r in enumerate(all_results):
             if r._source is not source:
                 raise ValueError(
-                    "union() requires all MatchResults to share the same source (same matcher/deduplicator)."
+                    "union() requires all MatchResults to share the same source (same matcher/deduplicator/batched)."
                 )
             if r._original_left is not self._original_left:
                 raise ValueError(
@@ -424,11 +425,9 @@ class MatchResults:
         if isinstance(source, Deduplicator):
             left_id = source._id_col
             right_id = source._id_col
-            right_df = source._matcher.right
         else:
             left_id = source.left_id
             right_id = source.right_id
-            right_df = source.right
         right_id_right = f"{right_id}_right"
 
         # Require ID columns in all
@@ -449,22 +448,14 @@ class MatchResults:
             # All empty: return empty with same schema as self (canonical + any score/on)
             return MatchResults(self.matches, self._original_left, self._source)
 
-        # Rejoin to get canonical left + right columns
-        right_with_suffix = right_df.with_columns(pl.col(right_id).alias(right_id_right))
-        combined = self._original_left.join(
-            combined_pairs, left_on=left_id, right_on="_lid", how="inner"
-        ).join(
-            right_with_suffix,
-            left_on="_rid",
-            right_on=right_id,
-            how="inner",
-            suffix="_right",
+        # Build one row per pair from matches (works for Matcher, Deduplicator, BatchedMatcher).
+        # Different results may have different columns (e.g. exact_* vs fuzzy_*); align with nulls.
+        combined = pl.concat([r.matches for r in all_results], how="diagonal_relaxed").unique(
+            subset=[left_id, right_id_right], keep="first"
         )
-        to_drop = [c for c in ["_lid", "_rid"] if c in combined.columns]
-        if to_drop:
-            combined = combined.drop(to_drop)
-        # One row per pair (source may have duplicate IDs; keep first)
-        combined = combined.unique(subset=[left_id, right_id_right])
+        score_on_cols = [c for c in combined.columns if is_score_on_column(c)]
+        if score_on_cols:
+            combined = combined.drop(score_on_cols)
 
         # Group by algorithm kind: for each kind, ordered list of result indices that have it
         runs_per_kind = defaultdict(list)
@@ -487,11 +478,14 @@ class MatchResults:
                 target_score = score_col + suffix
                 target_on = on_col + suffix
                 r = all_results[result_idx]
-                sub = r.matches.select(
-                    pl.col(left_id),
-                    pl.col(right_id_right),
-                    pl.col(score_col).alias(target_score),
-                    pl.col(on_col).alias(target_on),
+                sub = (
+                    r.matches.select(
+                        pl.col(left_id),
+                        pl.col(right_id_right),
+                        pl.col(score_col).alias(target_score),
+                        pl.col(on_col).alias(target_on),
+                    )
+                    .unique(subset=[left_id, right_id_right], keep="first")
                 )
                 combined = combined.join(sub, on=[left_id, right_id_right], how="left")
 
@@ -505,7 +499,7 @@ class MatchResults:
         if source is None:
             raise ValueError(
                 "to_pairs() and to_clusters() require a matcher/source "
-                "(results from matcher.match() or deduplicator.match())."
+                "(results from matcher.match(), deduplicator.match(), or batched matcher)."
             )
         if isinstance(source, Deduplicator):
             left_id = source._id_col
