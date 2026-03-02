@@ -1114,3 +1114,88 @@ def test_union_requires_same_source():
     r2 = m2.match(match_on="email")
     with pytest.raises(ValueError, match="same source"):
         r1.union(r2)
+
+
+def test_to_pairs_deduplicator():
+    """to_pairs() returns unique (id, id_right) pairs from dedup matches."""
+    df = pl.DataFrame({
+        "id": [1, 2, 3],
+        "email": ["a@x.com", "a@x.com", "b@x.com"],
+    })
+    deduplicator = Deduplicator(source=df, id_col="id")
+    results = deduplicator.match(match_on="email")
+    pairs = results.to_pairs()
+    assert pairs.columns == ["id", "id_right"]
+    assert pairs.height == results.count
+    assert pairs.unique().height == pairs.height
+
+
+def test_to_pairs_matcher():
+    """to_pairs() returns unique (left_id, right_id_right) from matcher matches."""
+    left = pl.DataFrame({"id": [1, 2], "email": ["a@x.com", "b@x.com"]})
+    right = pl.DataFrame({"id": [10, 20], "email": ["a@x.com", "b@x.com"]})
+    matcher = Matcher(left=left, right=right, left_id="id", right_id="id")
+    results = matcher.match(match_on="email")
+    pairs = results.to_pairs()
+    assert pairs.columns == ["id", "id_right"]
+    assert pairs.height == 2
+    assert set(pairs.row(0)) | set(pairs.row(1)) == {1, 2, 10, 20}
+
+
+def test_to_pairs_requires_source():
+    """to_pairs() raises when results have no source (e.g. hand-built MatchResults)."""
+    matches = pl.DataFrame({"id": [1, 2], "id_right": [10, 20]})
+    results = MatchResults(matches, original_left=None, source=None)
+    with pytest.raises(ValueError, match="require a matcher/source"):
+        results.to_pairs()
+
+
+def test_clusters_from_pairs_transitive():
+    """_transitive_closure merges transitive pairs; root_id is min in each cluster."""
+    pairs = pl.DataFrame({
+        "a": [1, 2, 3],
+        "b": [2, 3, 4],
+    })
+    results = MatchResults(pl.DataFrame(), None, None)
+    out = results._transitive_closure(pairs, id_col_a="a", id_col_b="b")
+    assert "root_id" in out.columns and "match_id" in out.columns
+    # 1-2-3-4 is one component; root = 1
+    assert out.filter(pl.col("root_id") == 1).height == 4
+    assert set(out.filter(pl.col("root_id") == 1)["match_id"].to_list()) == {1, 2, 3, 4}
+
+
+def test_clusters_from_pairs_with_match_date():
+    """_transitive_closure(match_date=...) adds match_date column."""
+    from datetime import date
+    pairs = pl.DataFrame({"u": [1, 2], "v": [2, 3]})
+    results = MatchResults(pl.DataFrame(), None, None)
+    out = results._transitive_closure(pairs, id_col_a="u", id_col_b="v", match_date=date(2025, 2, 26))
+    assert "match_date" in out.columns
+    assert out["match_date"].to_list()[0] == date(2025, 2, 26)
+
+
+def test_clusters_from_pairs_drop_self_pairs():
+    """_transitive_closure drops self-pairs (u==v) by default."""
+    pairs = pl.DataFrame({"a": [1, 1], "b": [2, 1]})
+    results = MatchResults(pl.DataFrame(), None, None)
+    out = results._transitive_closure(pairs, id_col_a="a", id_col_b="b", drop_self_pairs=True)
+    # Only (1,2) -> one component {1, 2}, root=1, two rows
+    assert out.height == 2
+    assert set(out["match_id"].to_list()) == {1, 2}
+
+
+def test_to_clusters_deduplicator():
+    """to_clusters() returns root_id, match_id from dedup matches (transitive closure)."""
+    df = pl.DataFrame({
+        "id": [1, 2, 3],
+        "email": ["a@x.com", "a@x.com", "a@x.com"],
+    })
+    deduplicator = Deduplicator(source=df, id_col="id")
+    results = deduplicator.match(match_on="email")
+    clusters = results.to_clusters()
+    assert clusters.columns == ["root_id", "match_id"]
+    # All three in one cluster; root is min id
+    assert clusters["root_id"].n_unique() == 1
+    assert clusters["root_id"].min() == 1
+    assert clusters.height == 3
+    assert set(clusters["match_id"].to_list()) == {1, 2, 3}

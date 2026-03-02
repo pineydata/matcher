@@ -34,10 +34,13 @@ Key Methods:
 - count: Property returning the number of matches
 - pipe(): Chain arbitrary DataFrame transformations
 - refine(): Apply additional matching rules to unmatched records
-- union(): Combine with other MatchResults (same source); pair set is union; score/on preserved per run (first run → kind_score/kind_on, later runs → kind_score_2/kind_on_2, etc.; no coalescing)
+- union(): Combine with other MatchResults (same source); one row per pair; score/on preserved per run
+- to_pairs(): Return unique (left_id, right_id_right) pairs as DataFrame
+- to_clusters(): Transitive closure → long-format root_id, match_id [, match_date] for DB load
 - evaluate(): Compare matches against ground truth and return metrics
 - sample(): Return a random sample of matches (for review or inspection)
 - export_for_review(): Export matches to CSV for human review (Phase 4)
+
 
 Dependencies:
 - Works with both Matcher and Deduplicator instances
@@ -51,10 +54,11 @@ Design Notes:
 """
 
 from pathlib import Path
+from datetime import date, datetime
+from typing import Union, Optional, Callable, TYPE_CHECKING
 
 import polars as pl
 from polars import DataFrame
-from typing import Union, Optional, Callable, TYPE_CHECKING
 
 from matcher.batched import BatchedMatcher
 from matcher.evaluators import SimpleEvaluator
@@ -387,8 +391,8 @@ class MatchResults:
         No coalescing: you see every run's values and can apply your own rule.
 
         Returns:
-            New MatchResults with rows = union of (left_id, right_id_right), canonical
-            left + right columns, and score/on columns (with _2, _3 suffixes for
+            New MatchResults with exactly one row per (left_id, right_id_right). Canonical
+            left + right columns and score/on columns (with _2, _3 suffixes for
             multiple runs of the same algorithm type). Nulls where a pair did not
             appear in that run.
         """
@@ -459,6 +463,8 @@ class MatchResults:
         to_drop = [c for c in ["_lid", "_rid"] if c in combined.columns]
         if to_drop:
             combined = combined.drop(to_drop)
+        # One row per pair (source may have duplicate IDs; keep first)
+        combined = combined.unique(subset=[left_id, right_id_right])
 
         # Group by algorithm kind: for each kind, ordered list of result indices that have it
         runs_per_kind = defaultdict(list)
@@ -490,6 +496,139 @@ class MatchResults:
                 combined = combined.join(sub, on=[left_id, right_id_right], how="left")
 
         return MatchResults(combined, self._original_left, self._source)
+
+    def _get_pair_id_columns(self) -> tuple[str, str]:
+        """Return (left_id, right_id_right) from source. Raises if no source."""
+        from matcher.deduplicator import Deduplicator
+
+        source = self._source
+        if source is None:
+            raise ValueError(
+                "to_pairs() and to_clusters() require a matcher/source "
+                "(results from matcher.match() or deduplicator.match())."
+            )
+        if isinstance(source, Deduplicator):
+            left_id = source._id_col
+            right_id = source._id_col
+        else:
+            left_id = source.left_id
+            right_id = source.right_id
+        right_id_right = f"{right_id}_right"
+        return left_id, right_id_right
+
+    def to_pairs(self) -> DataFrame:
+        """Return a DataFrame of unique (left_id, right_id_right) pairs.
+
+        One row per pair; column names match the matches DataFrame.
+        Requires a matcher/source (from match() or deduplicator.match()).
+
+        Returns:
+            DataFrame with two columns: left_id and right_id_right, deduplicated.
+        """
+        left_id, right_id_right = self._get_pair_id_columns()
+        if left_id not in self.matches.columns or right_id_right not in self.matches.columns:
+            raise ValueError(
+                f"matches must have '{left_id}' and '{right_id_right}' columns. "
+                f"Found: {list(self.matches.columns)}."
+            )
+        return self.matches.select(pl.col(left_id), pl.col(right_id_right)).unique()
+
+    def to_clusters(
+        self,
+        *,
+        match_date: Optional[Union[date, datetime]] = None,
+    ) -> DataFrame:
+        """Return clusters as long-format DataFrame: root_id, match_id [, match_date].
+
+        Runs transitive closure on the match pairs; root_id is the minimum ID in each
+        cluster. Suitable for loading into a DB. Requires a matcher/source.
+
+        Args:
+            match_date: Optional date or datetime to add as match_date column.
+
+        Returns:
+            DataFrame with root_id, match_id, and match_date (if provided).
+        """
+        left_id, right_id_right = self._get_pair_id_columns()
+        pairs = self.to_pairs()
+        return self._transitive_closure(
+            pairs,
+            id_col_a=left_id,
+            id_col_b=right_id_right,
+            match_date=match_date,
+            drop_self_pairs=True,
+        )
+
+    def _transitive_closure(
+        self,
+        pairs: DataFrame,
+        id_col_a: str,
+        id_col_b: str,
+        *,
+        match_date: Optional[Union[date, datetime]] = None,
+        drop_self_pairs: bool = True,
+    ) -> DataFrame:
+        """Compute transitive closure of pairs; return one row per (cluster, member).
+
+        Uses Union-Find. Each component gets root_id = min(member IDs). Output is
+        long-format: root_id, match_id [, match_date], suitable for loading into a DB.
+        """
+        if id_col_a not in pairs.columns or id_col_b not in pairs.columns:
+            raise ValueError(
+                f"pairs must have columns '{id_col_a}' and '{id_col_b}'. "
+                f"Found: {list(pairs.columns)}."
+            )
+        work = pairs.select(pl.col(id_col_a), pl.col(id_col_b))
+        if drop_self_pairs:
+            work = work.filter(pl.col(id_col_a) != pl.col(id_col_b))
+        if work.height == 0:
+            schema = {"root_id": pairs.schema[id_col_a], "match_id": pairs.schema[id_col_b]}
+            if match_date is not None:
+                schema["match_date"] = pl.Datetime("us") if isinstance(match_date, datetime) else pl.Date
+            return pl.DataFrame(schema=schema)  # type: ignore[arg-type]
+
+        parent: dict = {}
+
+        def find(x: Union[int, str]) -> Union[int, str]:
+            parent.setdefault(x, x)
+            while parent[x] != x:
+                parent[x] = parent[parent[x]]
+                x = parent[x]
+            return x
+
+        def union(x: Union[int, str], y: Union[int, str]) -> None:
+            rx, ry = find(x), find(y)
+            if rx != ry:
+                parent[ry] = rx
+
+        for a, b in work.iter_rows():
+            union(a, b)
+
+        members = set()
+        for a, b in work.iter_rows():
+            members.add(a)
+            members.add(b)
+        root_to_members: dict = {}
+        for m in members:
+            r = find(m)
+            root_to_members.setdefault(r, []).append(m)
+
+        rows = []
+        for _root, mems in root_to_members.items():
+            root_id = min(mems)
+            for m in mems:
+                row = {"root_id": root_id, "match_id": m}
+                if match_date is not None:
+                    row["match_date"] = match_date
+                rows.append(row)
+
+        out = pl.DataFrame(rows)
+        if match_date is not None and "match_date" in out.columns:
+            if isinstance(match_date, datetime):
+                out = out.with_columns(pl.col("match_date").cast(pl.Datetime("us")))
+            else:
+                out = out.with_columns(pl.col("match_date").cast(pl.Date))
+        return out
 
     def evaluate(
         self,
