@@ -711,6 +711,63 @@ def test_match_with_blocking_key_same_results():
     assert without.matches["id_right"].to_list() == with_blocking.matches["id_right"].to_list()
 
 
+def test_exact_match_with_distinct_left_right_ids_and_blocking():
+    """Regression: exact match works when left/right IDs differ and block_on is used.
+
+    This mirrors ContactAttributes-style matching where:
+    - left_id is ContactId
+    - right_id is PatientId
+    - join key is AttributeValue
+    - blocking key is BlockKey
+
+    Previously this hit a ColumnNotFoundError in ExactMatcher's fallback path
+    that ensures `{right_id}_right` exists in the result.
+    """
+    left = pl.DataFrame({
+        "ContactId": ["1"],
+        "AttributeType": ["address"],
+        "AttributeValue": ["123 main st"],
+        "FirstNameNormalized": ["john"],
+        "LastNameNormalized": ["doe"],
+        "BlockKey": ["60601"],
+        "NameInitial": ["J"],
+        "SourceRecordId": ["left-1"],
+        "SourceIdColumn": ["ContactId"],
+    })
+    right = pl.DataFrame({
+        "PatientAttributeId": ["pa-1"],
+        "PatientId": ["9"],
+        "GuarantorId": ["g-1"],
+        "IsMinor": [False],
+        "IsGuarantorContact": [False],
+        "AttributeType": ["address"],
+        "AttributeValue": ["123 main st"],
+        "FirstNameNormalized": ["john"],
+        "LastNameNormalized": ["doe"],
+        "BlockKey": ["60601"],
+        "NameInitial": ["J"],
+        "SourceRecordId": ["right-1"],
+        "SourceIdColumn": ["PatientId"],
+    })
+
+    matcher = Matcher(
+        left=left.filter(pl.col("AttributeType") == "address"),
+        right=right.filter(pl.col("AttributeType") == "address"),
+        left_id="ContactId",
+        right_id="PatientId",
+    )
+
+    results = matcher.match(match_on="AttributeValue", block_on="BlockKey")
+
+    assert results.count == 1
+    assert "PatientId_right" in results.matches.columns
+    row = results.matches.select("ContactId", "PatientId_right", "AttributeValue", "BlockKey").to_dicts()[0]
+    assert row["ContactId"] == "1"
+    assert row["PatientId_right"] == "9"
+    assert row["AttributeValue"] == "123 main st"
+    assert row["BlockKey"] == "60601"
+
+
 def test_match_with_blocking_key_no_common_blocks():
     """When left and right share no blocking key value, no matches."""
     left = pl.DataFrame({
