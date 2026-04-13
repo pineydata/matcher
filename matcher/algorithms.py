@@ -143,9 +143,9 @@ class ExactMatcher(MatchingAlgorithm):
         right_id_right = f"{right_id}_right"
         if right_id in right.columns and right_id_right not in result.columns:
             # Add right_id_right by joining on the field(s) again
+            join_cols = [field] if isinstance(field, str) else field
             right_ids = right.select(
-                [field] if isinstance(field, str) else field,
-                pl.col(right_id).alias(right_id_right)
+                [*join_cols, pl.col(right_id).alias(right_id_right)]
             )
             result = result.join(right_ids, on=field, how="left", suffix="_temp")
             # Clean up if we got a temp column
